@@ -27,14 +27,6 @@ globalThis.MainSettings = (class MainSettings {
     IS_INNER_SELF_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
-    // Is World Archivist already enabled when the adventure begins?
-    IS_WORLD_ARCHIVIST_ENABLED_BY_DEFAULT: false
-    // (true or false)
-    ,
-    // Which AI Dungeon story card types may World Archivist create and update?
-    WORLD_ARCHIVIST_CARD_TYPES: "Character, Location, Race, Class, Faction, Custom"
-    // (comma separated exact type names)
-    ,
     // Is the player character's first name known in advance? Ignore this setting if unsure
     PREDETERMINED_PLAYER_CHARACTER_NAME: ""
     // (any name inside the "" or leave empty)
@@ -246,14 +238,6 @@ function InnerSelf(hook) {
     IS_INNER_SELF_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
-    // Is World Archivist already enabled when the adventure begins?
-    IS_WORLD_ARCHIVIST_ENABLED_BY_DEFAULT: false
-    // (true or false)
-    ,
-    // Which AI Dungeon story card types may World Archivist create and update?
-    WORLD_ARCHIVIST_CARD_TYPES: "Character, Location, Race, Class, Faction, Custom"
-    // (comma separated exact type names)
-    ,
     // Is the player character's first name known in advance? Ignore this setting if unsure
     PREDETERMINED_PLAYER_CHARACTER_NAME: ""
     // (any name inside the "" or leave empty)
@@ -366,27 +350,6 @@ function InnerSelf(hook) {
             // NGL this one didn't need to be stateful but I didn't feel like declaring a local so whatevs
             // Basically AC sets this to true when it does stuff, so Inner Self can inhibit itself
             event: false
-        },
-        // World Archivist persistent state. Step 1 only establishes storage; no archive tasks run yet.
-        WA: {
-            enabled: false,
-            hash: "",
-            pending: null,
-            operation: null,
-            lastTurn: -1,
-            lastScanTurn: -1,
-            cooldown: 0,
-            candidateCounter: 0,
-            candidates: {},
-            stats: {
-                scans: 0,
-                none: 0,
-                created: 0,
-                updated: 0,
-                rejected: 0,
-                duplicates: 0,
-                errors: 0
-            }
         }
     });
     /**
@@ -446,99 +409,6 @@ function InnerSelf(hook) {
         // That empty catch looks so dumb lol
         return {};
     };
-    // ==================== WORLD ARCHIVIST FOUNDATION ====================
-    // Step 1 defines configuration data, ownership metadata, and formal field schemas only.
-    // Context prompts and card mutation behavior are intentionally added in later steps.
-    const WA = Object.freeze({
-        marker: "@WORLD_ARCHIVIST",
-        version: 1,
-        types: Object.freeze(["Character", "Location", "Race", "Class", "Faction", "Custom"]),
-        schemas: Object.freeze({
-            Character: Object.freeze([
-                "Name", "Race", "Age", "Occupation", "Affiliations", "Home",
-                "Public role", "Confirmed skills", "Confirmed abilities",
-                "Persistent physical traits", "Important possessions", "Current long-term status"
-            ]),
-            Location: Object.freeze([
-                "Name", "Type", "Region", "Parent territory", "Primary inhabitants",
-                "Approximate population", "Government", "Leader", "Main industries",
-                "Resources", "Defenses", "Known routes", "Affiliations", "Current condition"
-            ]),
-            Race: Object.freeze([
-                "Name", "Classification", "Common physical traits", "Typical lifespan",
-                "Homelands", "Languages", "Known cultures", "Confirmed abilities",
-                "Common limitations", "Relations with other peoples", "Current status"
-            ]),
-            Class: Object.freeze([
-                "Name", "Category", "Primary role", "Typical training", "Core skills",
-                "Common equipment", "Known abilities", "Limitations", "Organizations", "Social status"
-            ]),
-            Faction: Object.freeze([
-                "Name", "Type", "Leader", "Headquarters", "Territory", "Approximate size",
-                "Purpose", "Government or structure", "Resources", "Military strength",
-                "Allies", "Enemies", "Current conflicts", "Current status"
-            ]),
-            Custom: Object.freeze([
-                "Name", "Subtype", "Scope", "Description", "Confirmed rules",
-                "Known limitations", "Owners or authorities", "Related entities", "Current status"
-            ])
-        }),
-        customSubtypes: Object.freeze([
-            "Artifact", "Law", "Treaty", "Event", "Magic Rule", "World Rule",
-            "Calendar", "Currency", "Technology", "Institution", "Resource", "Other"
-        ])
-    });
-    /**
-     * Parses the strict comma-separated World Archivist type setting.
-     * Unsupported, misspelled, or pluralized values are ignored.
-     * @param {string|string[]} value - Raw setting value
-     * @returns {string[]} Valid types in canonical order
-     */
-    const parseWorldArchivistTypes = (value = "") => {
-        const supplied = new Set((Array.isArray(value) ? value : String(value).split(","))
-            .filter(type => (typeof type === "string"))
-            .map(type => type.trim())
-        );
-        return WA.types.filter(type => supplied.has(type));
-    };
-    /**
-     * Normalizes a World Archivist entity title into a stable metadata ID.
-     * @param {string} title - Entity title
-     * @returns {string} Normalized ID
-     */
-    const worldArchivistId = (title = "") => title.toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "")
-        .replace(/_+/g, "_");
-    /**
-     * Reads World Archivist metadata from the beginning of a story card description.
-     * @param {Object} card - Story card
-     * @returns {Object} Parsed metadata or an empty object
-     */
-    const readWorldArchivistMetadata = (card = {}) => {
-        if ((typeof card.description !== "string") || !card.description.startsWith(WA.marker)) {
-            return {};
-        }
-        const line = card.description.slice(WA.marker.length).replace(/^\s*\n?/, "").split("\n", 1)[0].trim();
-        const metadata = deserialize(line);
-        return (
-            (metadata.version === WA.version)
-            && WA.types.includes(metadata.schema)
-            && (typeof metadata.id === "string")
-            && (metadata.id !== "")
-        ) ? metadata : {};
-    };
-    /**
-     * Builds the machine-owned metadata prefix while preserving optional user notes.
-     * @param {Object} metadata - Metadata payload
-     * @param {string} notes - Optional text following metadata
-     * @returns {string} Story card description
-     */
-    const writeWorldArchivistMetadata = (metadata = {}, notes = "") => [
-        WA.marker,
-        JSON.stringify(metadata),
-        (typeof notes === "string") ? notes.trim() : ""
-    ].filter((part, index) => (index < 2) || (part !== "")).join("\n\n");
     /**
      * Validated config settings for Inner Self
      * Default settings are specified by creators at the scenario level
@@ -558,8 +428,6 @@ function InnerSelf(hook) {
      * @property {boolean} debug - Is debug mode enabled for inline task output visibility?
      * @property {boolean} pin - Is the config card pinned near the top of the list?
      * @property {boolean} auto - Is Auto-Cards enabled?
-     * @property {boolean} archive - Is World Archivist enabled?
-     * @property {string[]} archiveTypes - Story card types World Archivist may create or update
      * @property {string[]} agents - All agent names, ordered from highest to lowest trigger priority
      */
     /**
@@ -599,8 +467,6 @@ function InnerSelf(hook) {
             debug: false,
             pin: false,
             auto: false,
-            archive: false,
-            archiveTypes: [],
             agents: []
         });
         /** @type {config} */
@@ -759,25 +625,6 @@ function InnerSelf(hook) {
                 { message: "Pin this config card near the top:", ...factory(
                     "pin", S.IS_CONFIG_CARD_PINNED_BY_DEFAULT
                 ) },
-                { message: "Enable World Archivist:", ...factory(
-                    "archive", S.IS_WORLD_ARCHIVIST_ENABLED_BY_DEFAULT
-                ) },
-                {
-                    message: "World Archivist card types:",
-                    builder: (cfg = {}) => ` ${(
-                        config.archiveTypes ?? cfg.setter?.(S.WORLD_ARCHIVIST_CARD_TYPES)
-                    ).join(", ")}`,
-                    setter: (value = null, fallible = false) => {
-                        if ((typeof value !== "string") && !Array.isArray(value)) {
-                            if (fallible) {
-                                return;
-                            }
-                            value = S.WORLD_ARCHIVIST_CARD_TYPES;
-                        }
-                        config.archiveTypes = parseWorldArchivistTypes(value);
-                        return config.archiveTypes;
-                    }
-                },
                 { message: "Install Auto-Cards:", ...factory(
                     "auto", S.IS_AC_ENABLED_BY_DEFAULT
                 ) },
