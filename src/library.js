@@ -2862,6 +2862,15 @@ Follow the format **perfectly**.
     // Process model output and implement brain operations
     /** @type {config} */
     const config = Config.get();
+    // ==================== WORLD ARCHIVIST OUTPUT INTEGRATION ====================
+    // Parse a hidden World Archivist operation before normal output cleanup.
+    // This is dormant unless the output explicitly begins with "(world_".
+    const worldArchiveExtraction = extractWorldArchivistOperation(text);
+    const worldArchiveOperation = worldArchiveExtraction.operation;
+    if (worldArchiveOperation.matched) {
+        // Never expose recognized maintenance syntax in visible story prose.
+        text = worldArchiveExtraction.text;
+    }
     /**
      * Ensures clean visual separation between actions
      * Only applies after "continue" or "story" actions
@@ -3457,12 +3466,46 @@ I hope you will have lots of fun!
         prespace();
     }
     // ==================== OPERATION EXECUTOR ====================
-    // Execute queued brain operations and persist changes
+    // Execute queued World Archivist and brain operations independently.
+    const hash = historyHash();
+
+    // World Archivist does not require an active NPC or Inner Self brain operation.
+    if (worldArchiveOperation.matched) {
+        if (IS.WA.hash === hash) {
+            // Retry or erase-and-continue replay of the same generated output.
+            countWorldArchivistResult("duplicates");
+            debugWorldArchivist(
+                config.debug,
+                "Skipped duplicate operation for repeated history"
+            );
+        } else {
+            // Mark the history state before applying the operation so a partially
+            // rejected or malformed command is not repeatedly processed on Retry.
+            IS.WA.hash = hash;
+            IS.WA.operation = {
+                kind: worldArchiveOperation.kind ?? "malformed",
+                schema: worldArchiveOperation.schema ?? "",
+                title: worldArchiveOperation.title ?? "",
+                turn: history.length
+            };
+            const worldArchiveResult = applyWorldArchivistOperation(
+                worldArchiveOperation,
+                config,
+                history.length
+            );
+            IS.WA.lastTurn = history.length;
+            IS.WA.operation.result = worldArchiveResult?.reason ?? "unknown";
+            // No task remains pending after an output operation is handled.
+            IS.WA.pending = null;
+        }
+    }
+
+    // Inner Self brain execution retains its original independent behavior.
     if ((operations.length === 0) || (agent === null)) {
-        // No operations to execute, we're done
+        // No brain operations to execute, we're done.
+        text ||= "\u200B";
         return;
     }
-    const hash = historyHash();
     if (IS.hash === hash) {
         // Same history hash means this turn was a retry or erase + continue
         // This prevents duplicate brain modifications on retry (cached outputs cause problems)
