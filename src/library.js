@@ -539,225 +539,290 @@ function InnerSelf(hook) {
         JSON.stringify(metadata),
         (typeof notes === "string") ? notes.trim() : ""
     ].filter((part, index) => (index < 2) || (part !== "")).join("\n\n");
-    // ==================== WORLD ARCHIVIST STORY CARD DATA LAYER ====================
-    // Step 2 provides deterministic card parsing and mutation helpers.
-    // Nothing calls these helpers automatically until later lifecycle integration steps.
+    // ==================== WORLD ARCHIVIST PROSE DATA LAYER ====================
+    // World Archivist stores complete model-written Story Card entries.
+    // Blueprint fields remain descriptive guidance and are not parsed by JavaScript.
+
+    const WA_ENTRY_LIMIT = 1600;
+
     const WA_GENERIC_TRIGGERS = new Set([
         "character", "person", "people", "location", "place", "region", "village",
         "town", "city", "forest", "race", "species", "class", "profession", "job",
         "faction", "group", "guild", "kingdom", "nation", "custom", "world", "thing"
     ]);
+
     /**
      * Returns user-authored notes stored after World Archivist metadata.
-     * @param {Object} card - Story card
-     * @returns {string} Notes following the metadata block
+     * @param {Object} card - Story Card
+     * @returns {string} Notes following metadata
      */
     const readWorldArchivistNotes = (card = {}) => {
-        if ((typeof card.description !== "string") || !card.description.startsWith(WA.marker)) {
+        if (
+            (typeof card.description !== "string")
+            || !card.description.startsWith(WA.marker)
+        ) {
             return "";
         }
-        const remainder = card.description.slice(WA.marker.length).replace(/^\s*\n?/, "");
+
+        const remainder = card.description
+            .slice(WA.marker.length)
+            .replace(/^\s*\n?/, "");
+
         const newline = remainder.indexOf("\n");
-        return (newline === -1) ? "" : remainder.slice(newline + 1).trim();
+
+        return (newline === -1)
+            ? ""
+            : remainder.slice(newline + 1).trim();
     };
+
     /**
-     * Returns the ordered field list for a supported schema.
-     * @param {string} schema - World Archivist schema name
-     * @returns {string[]} Defensive copy of the field list
+     * Returns a defensive copy of one blueprint.
+     * Blueprints guide model writing but do not constrain stored prose syntax.
+     * @param {string} schema - World Archivist type
+     * @returns {string[]} Blueprint topics
      */
     const worldArchivistSchema = (schema = "") => (
-        Array.isArray(WA.schemas[schema]) ? [...WA.schemas[schema]] : []
+        Array.isArray(WA.schemas[schema])
+        ? [...WA.schemas[schema]]
+        : []
     );
+
     /**
-     * Cleans a field value without inventing or interpreting information.
-     * @param {*} value - Proposed field value
-     * @param {number} limit - Maximum stored characters
+     * Cleans short identifiers such as titles and triggers.
+     * @param {*} value - Proposed value
+     * @param {number} limit - Maximum length
      * @returns {string} Clean single-line value
      */
-    const cleanWorldArchivistValue = (value = "", limit = 500) => (
+    const cleanWorldArchivistValue = (
+        value = "",
+        limit = 500
+    ) => (
         (typeof value === "string")
-        ? value.replace(/[\u200B-\u200D]+/g, "").replace(/\s+/g, " ").trim().slice(0, limit)
+        ? value
+            .replace(/[\u200B-\u200D]+/g, "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, limit)
         : ""
     );
+
     /**
-     * Filters a field object down to fields explicitly allowed by its schema.
-     * Empty values are retained only when clearEmpty is enabled.
-     * @param {string} schema - World Archivist schema name
-     * @param {Object} fields - Proposed fields
-     * @param {boolean} clearEmpty - Preserve empty strings as explicit clears
-     * @returns {Object} Canonically ordered validated fields
+     * Cleans a complete AI-written Story Card entry.
+     * Paragraphs are preserved.
+     * @param {*} value - Proposed complete entry
+     * @returns {string} Clean prose
      */
-    const validateWorldArchivistFields = (schema = "", fields = {}, clearEmpty = false) => {
-        const valid = {};
-        if (!fields || (typeof fields !== "object") || Array.isArray(fields)) {
-            return valid;
-        }
-        for (const field of worldArchivistSchema(schema)) {
-            if (!Object.prototype.hasOwnProperty.call(fields, field)) {
-                continue;
-            }
-            const value = cleanWorldArchivistValue(fields[field]);
-            if ((value !== "") || clearEmpty) {
-                valid[field] = value;
-            }
-        }
-        return valid;
-    };
-    /**
-     * Parses a formal World Archivist entry into known schema fields.
-     * Unknown prose and unknown labels are intentionally ignored.
-     * @param {string} schema - World Archivist schema name
-     * @param {string} entry - Existing story card entry
-     * @returns {Object} Parsed field object
-     */
-    const parseWorldArchivistEntry = (schema = "", entry = "") => {
-        const allowed = new Set(worldArchivistSchema(schema));
-        const fields = {};
-        if ((allowed.size === 0) || (typeof entry !== "string")) {
-            return fields;
-        }
-        for (const raw of entry.split("\n")) {
-            const line = raw.trim();
-            const colon = line.indexOf(":");
-            if (colon < 1) {
-                continue;
-            }
-            const field = line.slice(0, colon).trim();
-            if (!allowed.has(field)) {
-                continue;
-            }
-            const value = cleanWorldArchivistValue(line.slice(colon + 1));
-            if (value !== "") {
-                fields[field] = value;
-            }
-        }
-        return fields;
-    };
-    /**
-     * Renders known fields in canonical blueprint order.
-     * @param {string} schema - World Archivist schema name
-     * @param {Object} fields - Validated fields
-     * @returns {string} Formal story card entry
-     */
-    const renderWorldArchivistEntry = (schema = "", fields = {}) => worldArchivistSchema(schema)
-        .filter(field => (typeof fields[field] === "string") && (fields[field].trim() !== ""))
-        .map(field => `${field}: ${cleanWorldArchivistValue(fields[field])}`)
-        .join("\n");
+    const cleanWorldArchivistEntry = (value = "") => (
+        (typeof value !== "string")
+        ? ""
+        : value
+            .replace(/[\u200B-\u200D]+/g, "")
+            .replace(/\r/g, "")
+            .replace(/[ \t]+\n/g, "\n")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim()
+            .slice(0, WA_ENTRY_LIMIT)
+    );
+
     /**
      * Produces conservative Story Card trigger keys.
-     * Exact title is always first; generic category-only triggers are rejected.
-     * @param {string} title - Entity title
-     * @param {string|string[]} proposed - Additional triggers
-     * @returns {string[]} At most four unique triggers
+     * @param {string} title - Stable entity title
+     * @param {string|string[]} proposed - Optional additional keys
+     * @returns {string[]} At most four unique keys
      */
-    const cleanWorldArchivistTriggers = (title = "", proposed = []) => {
+    const cleanWorldArchivistTriggers = (
+        title = "",
+        proposed = []
+    ) => {
         title = cleanWorldArchivistValue(title, 100);
-        const source = Array.isArray(proposed) ? proposed : String(proposed).split(",");
+
+        const source = Array.isArray(proposed)
+            ? proposed
+            : String(proposed).split(",");
+
         const output = [];
         const seen = new Set();
+
         for (const trigger of [title, ...source]) {
-            const clean = cleanWorldArchivistValue(trigger, 80).replaceAll(",", "");
+            const clean = cleanWorldArchivistValue(
+                trigger,
+                80
+            ).replaceAll(",", "");
+
             const lower = clean.toLowerCase();
+
             if (
-                (clean === "") || seen.has(lower)
+                (clean === "")
+                || seen.has(lower)
                 || WA_GENERIC_TRIGGERS.has(lower)
             ) {
                 continue;
             }
+
             seen.add(lower);
             output.push(clean);
+
             if (4 <= output.length) {
                 break;
             }
         }
+
         return output;
     };
+
     /**
-     * Locates a World Archivist-owned card by stable ID and schema.
-     * @param {string} schema - World Archivist schema name
-     * @param {string} titleOrId - Display title or normalized metadata ID
-     * @returns {Object|null} Matching card reference
+     * Locates one Archivist-owned Story Card.
+     * @param {string} schema - Card type
+     * @param {string} titleOrId - Display title or normalized ID
+     * @returns {Object|null} Matching card
      */
-    const findWorldArchivistCard = (schema = "", titleOrId = "") => {
+    const findWorldArchivistCard = (
+        schema = "",
+        titleOrId = ""
+    ) => {
         const id = worldArchivistId(titleOrId);
-        if (!WA.types.includes(schema) || (id === "")) {
+
+        if (
+            !WA.types.includes(schema)
+            || (id === "")
+        ) {
             return null;
         }
+
         for (const card of storyCards) {
-            const metadata = readWorldArchivistMetadata(card);
-            if ((metadata.schema === schema) && (metadata.id === id)) {
+            const metadata =
+                readWorldArchivistMetadata(card);
+
+            if (
+                (metadata.schema === schema)
+                && (metadata.id === id)
+            ) {
                 return card;
             }
         }
+
         return null;
     };
+
     /**
-     * Finds any non-Archivist card with the same normalized title.
-     * Brain cards and manual cards both count as protected collisions.
+     * Finds a manual or Inner Self card with the same normalized title.
      * @param {string} title - Proposed title
-     * @returns {Object|null} Conflicting card reference
+     * @returns {Object|null} Protected collision
      */
-    const findWorldArchivistTitleCollision = (title = "") => {
+    const findWorldArchivistTitleCollision = (
+        title = ""
+    ) => {
         const id = worldArchivistId(title);
+
         if (id === "") {
             return null;
         }
+
         for (const card of storyCards) {
-            if (!card || (typeof card !== "object") || Array.isArray(card)) {
+            if (
+                !card
+                || (typeof card !== "object")
+                || Array.isArray(card)
+            ) {
                 continue;
             }
-            if (worldArchivistId(card.title ?? "") !== id) {
+
+            if (
+                worldArchivistId(card.title ?? "")
+                !== id
+            ) {
                 continue;
             }
-            if (Object.keys(readWorldArchivistMetadata(card)).length === 0) {
+
+            if (
+                Object.keys(
+                    readWorldArchivistMetadata(card)
+                ).length === 0
+            ) {
                 return card;
             }
         }
+
         return null;
     };
+
     /**
-     * Creates one owned formal Story Card without model involvement.
+     * Creates one Archivist-owned prose Story Card.
      * @param {Object} request - Creation request
-     * @param {string} request.schema - Enabled World Archivist schema
-     * @param {string} request.title - Display title
-     * @param {string|string[]} request.triggers - Proposed trigger keys
-     * @param {Object} request.fields - Verified schema fields
-     * @param {string[]} request.enabledTypes - Runtime-enabled schemas
-     * @param {number} request.turn - Current history turn
-     * @returns {Object} Result object with status and optional card
+     * @returns {Object} Result
      */
     const createWorldArchivistCard = ({
-        schema = "", title = "", triggers = [], fields = {}, enabledTypes = [], turn = history.length
+        schema = "",
+        title = "",
+        entry = "",
+        triggers = [],
+        enabledTypes = [],
+        turn = history.length
     } = {}) => {
-        title = cleanWorldArchivistValue(title, 100);
-        const enabled = new Set(enabledTypes);
-        if (!enabled.has(schema) || !WA.types.includes(schema)) {
-            return { ok: false, reason: "disabled_type" };
+        title = cleanWorldArchivistValue(
+            title,
+            100
+        );
+
+        entry = cleanWorldArchivistEntry(entry);
+
+        if (
+            !enabledTypes.includes(schema)
+            || !WA.types.includes(schema)
+        ) {
+            return {
+                ok: false,
+                reason: "disabled_type"
+            };
         }
+
         const id = worldArchivistId(title);
+
         if (id === "") {
-            return { ok: false, reason: "invalid_title" };
+            return {
+                ok: false,
+                reason: "invalid_title"
+            };
         }
-        if (findWorldArchivistCard(schema, id)) {
-            return { ok: false, reason: "already_exists" };
-        }
-        if (findWorldArchivistTitleCollision(title)) {
-            return { ok: false, reason: "manual_collision" };
-        }
-        const valid = validateWorldArchivistFields(schema, fields);
-        valid.Name = title;
-        const entry = renderWorldArchivistEntry(schema, valid);
+
         if (entry === "") {
-            return { ok: false, reason: "empty_entry" };
+            return {
+                ok: false,
+                reason: "empty_entry"
+            };
         }
-        const keys = cleanWorldArchivistTriggers(title, triggers);
+
+        if (findWorldArchivistCard(schema, id)) {
+            return {
+                ok: false,
+                reason: "already_exists"
+            };
+        }
+
+        if (findWorldArchivistTitleCollision(title)) {
+            return {
+                ok: false,
+                reason: "manual_collision"
+            };
+        }
+
         const metadata = {
             version: WA.version,
             id,
             schema,
-            createdTurn: Number.isInteger(turn) ? turn : history.length,
-            updatedTurn: Number.isInteger(turn) ? turn : history.length
+            createdTurn: Number.isInteger(turn)
+                ? turn
+                : history.length,
+            updatedTurn: Number.isInteger(turn)
+                ? turn
+                : history.length
         };
+
+        const keys = cleanWorldArchivistTriggers(
+            title,
+            triggers
+        );
+
         const card = addStoryCard(
             keys.join(", "),
             entry,
@@ -766,214 +831,350 @@ function InnerSelf(hook) {
             writeWorldArchivistMetadata(metadata),
             { returnCard: true }
         );
+
         return card
-            ? { ok: true, reason: "created", card }
-            : { ok: false, reason: "creation_failed" };
-    };
-    /**
-     * Updates only explicit verified fields on an owned Story Card.
-     * Existing fields not present in the update remain untouched.
-     * @param {Object} request - Update request
-     * @param {string} request.schema - Enabled World Archivist schema
-     * @param {string} request.title - Existing entity title or ID
-     * @param {Object} request.fields - Explicit field changes
-     * @param {string[]} request.enabledTypes - Runtime-enabled schemas
-     * @param {string|string[]} request.triggers - Optional additional trigger keys
-     * @param {number} request.turn - Current history turn
-     * @returns {Object} Result object with status and optional card
-     */
-    const updateWorldArchivistCard = ({
-        schema = "", title = "", fields = {}, enabledTypes = [], triggers = null, turn = history.length
-    } = {}) => {
-        if (!new Set(enabledTypes).has(schema) || !WA.types.includes(schema)) {
-            return { ok: false, reason: "disabled_type" };
-        }
-        const card = findWorldArchivistCard(schema, title);
-        if (!card) {
-            return { ok: false, reason: "not_found" };
-        }
-        const changes = validateWorldArchivistFields(schema, fields, true);
-        delete changes.Name;
-        if (Object.keys(changes).length === 0) {
-            return { ok: false, reason: "no_valid_fields" };
-        }
-        const current = parseWorldArchivistEntry(schema, card.entry ?? "");
-        let changed = false;
-        for (const [field, value] of Object.entries(changes)) {
-            if (value === "") {
-                if (Object.prototype.hasOwnProperty.call(current, field)) {
-                    delete current[field];
-                    changed = true;
-                }
-            } else if (current[field] !== value) {
-                current[field] = value;
-                changed = true;
+            ? {
+                ok: true,
+                reason: "created",
+                card
             }
+            : {
+                ok: false,
+                reason: "creation_failed"
+            };
+    };
+
+    /**
+     * Replaces the complete prose entry of one owned Story Card.
+     * @param {Object} request - Rewrite request
+     * @returns {Object} Result
+     */
+    const rewriteWorldArchivistCard = ({
+        schema = "",
+        title = "",
+        entry = "",
+        triggers = null,
+        enabledTypes = [],
+        turn = history.length
+    } = {}) => {
+        entry = cleanWorldArchivistEntry(entry);
+
+        if (
+            !enabledTypes.includes(schema)
+            || !WA.types.includes(schema)
+        ) {
+            return {
+                ok: false,
+                reason: "disabled_type"
+            };
         }
-        if (!changed) {
-            return { ok: true, reason: "unchanged", card };
+
+        const card = findWorldArchivistCard(
+            schema,
+            title
+        );
+
+        if (!card) {
+            return {
+                ok: false,
+                reason: "not_found"
+            };
         }
-        const metadata = readWorldArchivistMetadata(card);
-        metadata.updatedTurn = Number.isInteger(turn) ? turn : history.length;
-        card.entry = renderWorldArchivistEntry(schema, current);
+
+        if (entry === "") {
+            return {
+                ok: false,
+                reason: "empty_entry"
+            };
+        }
+
+        if (
+            cleanWorldArchivistEntry(
+                card.entry ?? ""
+            ) === entry
+        ) {
+            return {
+                ok: true,
+                reason: "unchanged",
+                card
+            };
+        }
+
+        const metadata =
+            readWorldArchivistMetadata(card);
+
+        metadata.updatedTurn =
+            Number.isInteger(turn)
+            ? turn
+            : history.length;
+
+        card.entry = entry;
         card.type = schema.toLowerCase();
+
         if (triggers !== null) {
             card.keys = cleanWorldArchivistTriggers(
                 card.title ?? title,
                 triggers
             ).join(", ");
         }
-        card.description = writeWorldArchivistMetadata(
-            metadata,
-            readWorldArchivistNotes(card)
-        );
-        return { ok: true, reason: "updated", card };
+
+        card.description =
+            writeWorldArchivistMetadata(
+                metadata,
+                readWorldArchivistNotes(card)
+            );
+
+        return {
+            ok: true,
+            reason: "rewritten",
+            card
+        };
     };
+
     /**
-     * Clears one explicit field from an owned card.
-     * Identity Name cannot be cleared.
-     * @param {Object} request - Clear request
-     * @returns {Object} Result object
+     * Removes one Archivist-owned Story Card.
+     * Manual cards can never be removed through this helper.
+     * @param {Object} request - Deletion request
+     * @returns {Object} Result
      */
-    const clearWorldArchivistField = ({
-        schema = "", title = "", field = "", enabledTypes = [], turn = history.length
+    const deleteWorldArchivistCard = ({
+        schema = "",
+        title = "",
+        enabledTypes = []
     } = {}) => {
-        if ((field === "Name") || !worldArchivistSchema(schema).includes(field)) {
-            return { ok: false, reason: "invalid_field" };
-        }
-        return updateWorldArchivistCard({
-            schema,
-            title,
-            fields: { [field]: "" },
-            enabledTypes,
-            turn
-        });
-    };
-    // ==================== WORLD ARCHIVIST OPERATION PROTOCOL ====================
-    // Step 3 defines strict hidden command parsing and deterministic execution.
-    // The AI is not instructed to produce these operations until a later step.
-    /**
-     * Parses a JSON object used by a World Archivist operation.
-     * Only plain objects with string values are accepted.
-     * @param {string} source - Raw JSON
-     * @returns {Object|null} Valid object or null
-     */
-    const parseWorldArchivistFieldJSON = (source = "") => {
-        let parsed;
-        try {
-            parsed = JSON.parse(source);
-        } catch {
-            return null;
-        }
         if (
-            !parsed || (typeof parsed !== "object") || Array.isArray(parsed)
-            || (Object.getPrototypeOf(parsed) !== Object.prototype)
+            !enabledTypes.includes(schema)
+            || !WA.types.includes(schema)
         ) {
-            return null;
+            return {
+                ok: false,
+                reason: "disabled_type"
+            };
         }
-        const fields = {};
-        for (const [key, value] of Object.entries(parsed)) {
-            if ((typeof key !== "string") || (typeof value !== "string")) {
-                return null;
-            }
-            fields[key] = value;
+
+        const card = findWorldArchivistCard(
+            schema,
+            title
+        );
+
+        if (!card) {
+            return {
+                ok: false,
+                reason: "not_found"
+            };
         }
-        return fields;
+
+        const index = storyCards.indexOf(card);
+
+        if (index < 0) {
+            return {
+                ok: false,
+                reason: "not_found"
+            };
+        }
+
+        if (typeof removeStoryCard === "function") {
+            removeStoryCard(index);
+        } else {
+            storyCards.splice(index, 1);
+        }
+
+        return {
+            ok: true,
+            reason: "deleted"
+        };
     };
+
+    // ==================== WORLD ARCHIVIST PROSE OPERATION PROTOCOL ====================
+    // Inspired by Inner Self: one bounded semantic operation may appear anywhere
+    // in the model output and is removed before the story is displayed.
+    //
+    // Accepted examples:
+    //
+    // (world none)
+    //
+    // [world create | Location | The Greengrove:
+    // The Greengrove is a dense ancient forest west of the road.]
+    //
+    // {world rewrite | Location | The Greengrove:
+    // The Greengrove is a dense forest west of the road. A road lies half a day east.}
+    //
+    // (world delete | Location | The Greengrove)
+
     /**
-     * Parses one strict World Archivist operation from the beginning of model output.
-     * Backticks delimit user-controlled values and prevent ambiguous pipe splitting.
+     * Parses one bounded prose operation from anywhere in output.
      * @param {string} source - Model output
      * @returns {Object} Parse result
      */
-    const parseWorldArchivistOperation = (source = "") => {
+    const parseWorldArchivistOperation = (
+        source = ""
+    ) => {
         if (typeof source !== "string") {
-            return { matched: false, valid: false, consumed: 0, rest: "" };
-        }
-        const leading = source.match(/^\s*/)?.[0] ?? "";
-        const body = source.slice(leading.length);
-        const none = body.match(/^\(world_none\)/);
-        if (none) {
-            const consumed = leading.length + none[0].length;
             return {
-                matched: true,
-                valid: true,
-                kind: "none",
-                consumed,
-                raw: source.slice(0, consumed),
-                rest: source.slice(consumed).replace(/^\s+/, "")
+                matched: false,
+                valid: false,
+                consumed: 0,
+                rest: ""
             };
         }
-        const create = body.match(
-            /^\(world_create\s+`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]*)`\s*\|\s*`([^`]*)`\)/
-        );
-        if (create) {
-            const consumed = leading.length + create[0].length;
-            const fields = parseWorldArchivistFieldJSON(create[4]);
-            return {
-                matched: true,
-                valid: fields !== null,
-                kind: "create",
-                schema: create[1].trim(),
-                title: create[2].trim(),
-                triggers: create[3].split(",").map(trigger => trigger.trim()).filter(Boolean),
-                fields: fields ?? {},
-                consumed,
-                raw: source.slice(0, consumed),
-                rest: source.slice(consumed).replace(/^\s+/, "")
-            };
-        }
-        const update = body.match(
-            /^\(world_update\s+`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]*)`\)/
-        );
-        if (update) {
-            const consumed = leading.length + update[0].length;
-            const fields = parseWorldArchivistFieldJSON(update[3]);
-            return {
-                matched: true,
-                valid: fields !== null,
-                kind: "update",
-                schema: update[1].trim(),
-                title: update[2].trim(),
-                fields: fields ?? {},
-                consumed,
-                raw: source.slice(0, consumed),
-                rest: source.slice(consumed).replace(/^\s+/, "")
-            };
-        }
-        const clear = body.match(
-            /^\(world_clear\s+`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\)/
-        );
-        if (clear) {
-            const consumed = leading.length + clear[0].length;
-            return {
-                matched: true,
-                valid: true,
-                kind: "clear",
-                schema: clear[1].trim(),
-                title: clear[2].trim(),
-                field: clear[3].trim(),
-                consumed,
-                raw: source.slice(0, consumed),
-                rest: source.slice(consumed).replace(/^\s+/, "")
-            };
-        }
-        if (body.startsWith("(world_")) {
-            const closing = body.indexOf(")");
-            const consumed = (
-                closing === -1
-                ? leading.length
-                : leading.length + closing + 1
+
+        const pairs = {
+            "(": ")",
+            "[": "]",
+            "{": "}"
+        };
+
+        const openerPattern = /[\(\[\{]\s*world\b/ig;
+        let match;
+
+        while ((match = openerPattern.exec(source))) {
+            const start = match.index;
+            const opener = source[start];
+            const closer = pairs[opener];
+
+            let end = source.indexOf(
+                closer,
+                openerPattern.lastIndex
             );
+
+            // Inner Self-style repair: consume to line end when the closer is missing.
+            if (end === -1) {
+                const lineEnd = source.indexOf(
+                    "\n",
+                    openerPattern.lastIndex
+                );
+
+                end = (lineEnd === -1)
+                    ? source.length
+                    : lineEnd;
+            } else {
+                end += 1;
+            }
+
+            const raw = source.slice(start, end);
+            const inner = raw
+                .slice(
+                    1,
+                    raw.endsWith(closer)
+                        ? -1
+                        : undefined
+                )
+                .trim();
+
+            const none = inner.match(
+                /^world[\s_-]+none\s*$/i
+            );
+
+            if (none) {
+                return {
+                    matched: true,
+                    valid: true,
+                    kind: "none",
+                    raw,
+                    start,
+                    end,
+                    consumed: raw.length,
+                    rest: (
+                        source.slice(0, start)
+                        + source.slice(end)
+                    )
+                        .replace(/\n{3,}/g, "\n\n")
+                        .trim()
+                };
+            }
+
+            const deletion = inner.match(
+                /^world[\s_-]+delete\s*\|\s*([^|:\n]+)\s*\|\s*([^:\n]+)\s*$/i
+            );
+
+            if (deletion) {
+                const schema = deletion[1].trim();
+                const title = cleanWorldArchivistValue(
+                    deletion[2],
+                    100
+                );
+
+                return {
+                    matched: true,
+                    valid: (
+                        WA.types.includes(schema)
+                        && (title !== "")
+                    ),
+                    kind: "delete",
+                    schema,
+                    title,
+                    raw,
+                    start,
+                    end,
+                    consumed: raw.length,
+                    rest: (
+                        source.slice(0, start)
+                        + source.slice(end)
+                    )
+                        .replace(/\n{3,}/g, "\n\n")
+                        .trim()
+                };
+            }
+
+            const card = inner.match(
+                /^world[\s_-]+(create|rewrite)\s*\|\s*([^|:\n]+)\s*\|\s*([^:\n]+)\s*:\s*([\s\S]+)$/i
+            );
+
+            if (card) {
+                const kind = card[1].toLowerCase();
+                const schema = card[2].trim();
+
+                const title = cleanWorldArchivistValue(
+                    card[3],
+                    100
+                );
+
+                const entry = cleanWorldArchivistEntry(
+                    card[4]
+                );
+
+                return {
+                    matched: true,
+                    valid: (
+                        ["create", "rewrite"].includes(kind)
+                        && WA.types.includes(schema)
+                        && (title !== "")
+                        && (entry !== "")
+                    ),
+                    kind,
+                    schema,
+                    title,
+                    entry,
+                    raw,
+                    start,
+                    end,
+                    consumed: raw.length,
+                    rest: (
+                        source.slice(0, start)
+                        + source.slice(end)
+                    )
+                        .replace(/\n{3,}/g, "\n\n")
+                        .trim()
+                };
+            }
+
             return {
                 matched: true,
                 valid: false,
                 kind: "malformed",
-                consumed,
-                raw: source.slice(0, consumed),
-                rest: source.slice(consumed).replace(/^\s+/, "")
+                raw,
+                start,
+                end,
+                consumed: raw.length,
+                rest: (
+                    source.slice(0, start)
+                    + source.slice(end)
+                )
+                    .replace(/\n{3,}/g, "\n\n")
+                    .trim()
             };
         }
+
         return {
             matched: false,
             valid: false,
@@ -981,352 +1182,572 @@ function InnerSelf(hook) {
             rest: source
         };
     };
+
     /**
-     * Records one World Archivist result in persistent statistics.
-     * @param {string} key - Statistics key
-     * @returns {void}
+     * Records one World Archivist statistic.
+     * @param {string} key - Counter key
      */
-    const countWorldArchivistResult = (key = "") => {
+    const countWorldArchivistResult = (
+        key = ""
+    ) => {
         if (
             IS.WA?.stats
-            && Object.prototype.hasOwnProperty.call(IS.WA.stats, key)
+            && Object.prototype.hasOwnProperty.call(
+                IS.WA.stats,
+                key
+            )
             && Number.isInteger(IS.WA.stats[key])
         ) {
             IS.WA.stats[key]++;
         }
-        return;
     };
+
     /**
-     * Emits a concise World Archivist debug message using Inner Self debug mode.
-     * @param {boolean} enabled - Whether debug output is enabled
-     * @param {string} message - Debug message
-     * @returns {void}
+     * Writes concise debug information through the normal script log.
+     * @param {boolean} enabled - Debug enabled
+     * @param {string} message - Message
      */
-    const debugWorldArchivist = (enabled = false, message = "") => {
-        if (enabled && (typeof message === "string") && (message !== "")) {
+    const debugWorldArchivist = (
+        enabled = false,
+        message = ""
+    ) => {
+        if (
+            enabled
+            && (typeof message === "string")
+            && (message !== "")
+        ) {
             log(`[WA] ${message}`);
         }
-        return;
     };
+
     /**
-     * Applies one already-parsed World Archivist operation.
-     * This is deterministic JavaScript and does not consult the story model.
-     * @param {Object} operation - Result of parseWorldArchivistOperation
-     * @param {Object} config - Validated Inner Self configuration
+     * Applies one parsed prose operation.
+     * @param {Object} operation - Parsed operation
+     * @param {Object} config - Runtime configuration
      * @param {number} turn - Current history turn
-     * @returns {Object} Execution result
+     * @returns {Object} Mutation result
      */
     const applyWorldArchivistOperation = (
         operation = {},
         config = {},
         turn = history.length
     ) => {
-        const reject = (reason = "rejected") => {
+        const reject = (
+            reason = "rejected"
+        ) => {
             countWorldArchivistResult("rejected");
-            debugWorldArchivist(config.debug, `Rejected operation: ${reason}`);
-            return { ok: false, reason };
+            debugWorldArchivist(
+                config.debug,
+                `Rejected operation: ${reason}`
+            );
+
+            return {
+                ok: false,
+                reason
+            };
         };
+
         if (!config.archive) {
             return reject("disabled");
         }
+
         if (!operation.matched) {
-            return reject("not_world_archivist_operation");
+            return reject(
+                "not_world_archivist_operation"
+            );
         }
+
         if (!operation.valid) {
             countWorldArchivistResult("errors");
-            debugWorldArchivist(config.debug, "Malformed operation");
-            return { ok: false, reason: "malformed" };
+            debugWorldArchivist(
+                config.debug,
+                "Malformed operation"
+            );
+
+            return {
+                ok: false,
+                reason: "malformed"
+            };
         }
+
         if (operation.kind === "none") {
             countWorldArchivistResult("none");
-            debugWorldArchivist(config.debug, "No durable verified change");
-            return { ok: true, reason: "none" };
+
+            return {
+                ok: true,
+                reason: "none"
+            };
         }
-        if (!config.archiveTypes.includes(operation.schema)) {
-            return reject(`disabled type: ${operation.schema}`);
+
+        if (
+            !config.archiveTypes.includes(
+                operation.schema
+            )
+        ) {
+            return reject(
+                `disabled type: ${operation.schema}`
+            );
         }
+
         let result;
+
         if (operation.kind === "create") {
             result = createWorldArchivistCard({
                 schema: operation.schema,
                 title: operation.title,
-                triggers: operation.triggers,
-                fields: operation.fields,
+                entry: operation.entry,
+                triggers: [operation.title],
                 enabledTypes: config.archiveTypes,
                 turn
             });
-            if (result.ok) {
-                countWorldArchivistResult("created");
-                debugWorldArchivist(
-                    config.debug,
-                    `Created ${operation.schema}: ${operation.title}`
-                );
-            }
-        } else if (operation.kind === "update") {
-            result = updateWorldArchivistCard({
+        } else if (
+            operation.kind === "rewrite"
+        ) {
+            result = rewriteWorldArchivistCard({
                 schema: operation.schema,
                 title: operation.title,
-                fields: operation.fields,
+                entry: operation.entry,
                 enabledTypes: config.archiveTypes,
                 turn
             });
-            if (result.ok && (result.reason === "updated")) {
-                countWorldArchivistResult("updated");
-                debugWorldArchivist(
-                    config.debug,
-                    `Updated ${operation.schema}: ${operation.title}`
-                );
-            } else if (result.ok && (result.reason === "unchanged")) {
-                debugWorldArchivist(
-                    config.debug,
-                    `No field changes for ${operation.schema}: ${operation.title}`
-                );
-            }
-        } else if (operation.kind === "clear") {
-            result = clearWorldArchivistField({
+        } else if (
+            operation.kind === "delete"
+        ) {
+            result = deleteWorldArchivistCard({
                 schema: operation.schema,
                 title: operation.title,
-                field: operation.field,
-                enabledTypes: config.archiveTypes,
-                turn
+                enabledTypes: config.archiveTypes
             });
-            if (result.ok && (result.reason === "updated")) {
-                countWorldArchivistResult("updated");
-                debugWorldArchivist(
-                    config.debug,
-                    `Cleared ${operation.schema}.${operation.field}: ${operation.title}`
-                );
-            }
         } else {
             return reject("unknown_operation");
         }
-        if (!result?.ok) {
-            if (result?.reason === "manual_collision") {
-                countWorldArchivistResult("duplicates");
-            } else if (result?.reason === "already_exists") {
-                countWorldArchivistResult("duplicates");
-            } else {
-                countWorldArchivistResult("rejected");
+
+        if (result.ok) {
+            if (result.reason === "created") {
+                countWorldArchivistResult("created");
+            } else if (
+                result.reason === "rewritten"
+            ) {
+                countWorldArchivistResult("updated");
             }
+
             debugWorldArchivist(
                 config.debug,
-                `${operation.kind} failed: ${result?.reason ?? "unknown"}`
+                `${operation.kind}: ${operation.schema} ${operation.title}`
             );
+
+            return result;
         }
-        return result ?? { ok: false, reason: "missing_result" };
+
+        if (
+            [
+                "manual_collision",
+                "already_exists"
+            ].includes(result.reason)
+        ) {
+            countWorldArchivistResult("duplicates");
+        } else {
+            countWorldArchivistResult("rejected");
+        }
+
+        debugWorldArchivist(
+            config.debug,
+            `${operation.kind} failed: ${result.reason}`
+        );
+
+        return result;
     };
+
     /**
-     * Removes a recognized World Archivist prefix while preserving story prose.
-     * Invalid operations are removed only when they clearly begin with "(world_".
+     * Removes a recognized bounded operation while preserving story prose.
      * @param {string} source - Model output
-     * @returns {Object} Parsed operation and cleaned story text
+     * @returns {Object} Parsed operation and cleaned text
      */
-    const extractWorldArchivistOperation = (source = "") => {
-        const operation = parseWorldArchivistOperation(source);
+    const extractWorldArchivistOperation = (
+        source = ""
+    ) => {
+        const operation =
+            parseWorldArchivistOperation(source);
+
         return {
             operation,
-            text: operation.matched ? (operation.rest || " ") : source
+            text: operation.matched
+                ? (operation.rest || " ")
+                : source
         };
     };
+
     // ==================== WORLD ARCHIVIST TEST COMMANDS ====================
-    // Temporary deterministic tests used before model prompting is enabled.
-    const WA_TEST_TITLE = "World Archivist Test Site";
-    /**
-     * Formats a result as an in-game command response.
-     * @param {string} heading - Response heading
-     * @param {string[]} lines - Response details
-     * @returns {string} Display text
-     */
-    const formatWorldArchivistTest = (heading = "", lines = []) => `
+    // Deterministic tests for complete prose Story Card operations.
+
+    const WA_TEST_TITLE =
+        "World Archivist Test Site";
+
+    const formatWorldArchivistTest = (
+        heading = "",
+        lines = []
+    ) => `
 >>> World Archivist Test: ${heading}
 ${lines.filter(Boolean).join("\n")}
 <<<`.trim();
-    /**
-     * Removes the dedicated World Archivist test card.
-     * No unrelated card is ever removed.
-     * @returns {boolean} Whether a test card was removed
-     */
+
     const removeWorldArchivistTestCard = () => {
-        const card = findWorldArchivistCard("Location", WA_TEST_TITLE);
+        const card = findWorldArchivistCard(
+            "Location",
+            WA_TEST_TITLE
+        );
+
         if (!card) {
             return false;
         }
+
         const index = storyCards.indexOf(card);
+
         if (index < 0) {
             return false;
         }
-        removeStoryCard(index);
+
+        if (typeof removeStoryCard === "function") {
+            removeStoryCard(index);
+        } else {
+            storyCards.splice(index, 1);
+        }
+
         return true;
     };
-    /**
-     * Executes one deterministic /wa-test command.
-     * @param {string} input - Raw player input
-     * @param {config} config - Current Inner Self configuration
-     * @returns {string|null} Test response or null when input is not a test command
-     */
-    const runWorldArchivistTestCommand = (input = "", config = {}) => {
-        const match = input.trim().match(/^\/\s*wa[-\s]*test(?:\s+([a-z]+))?\s*$/i);
+
+    const runWorldArchivistTestCommand = (
+        input = "",
+        config = {}
+    ) => {
+        const match = input.trim().match(
+            /^\/\s*wa[-\s]*test(?:\s+([a-z]+))?\s*$/i
+        );
+
         if (!match) {
             return null;
         }
-        const command = (match[1] ?? "help").toLowerCase();
+
+        const command =
+            (match[1] ?? "help").toLowerCase();
+
         const execute = source => {
-            const operation = parseWorldArchivistOperation(source);
+            const operation =
+                parseWorldArchivistOperation(source);
+
             return {
                 operation,
-                result: applyWorldArchivistOperation(operation, config, history.length)
+                result: applyWorldArchivistOperation(
+                    operation,
+                    config,
+                    history.length
+                )
             };
         };
+
         const status = () => {
-            const card = findWorldArchivistCard("Location", WA_TEST_TITLE);
-            const metadata = card ? readWorldArchivistMetadata(card) : {};
-            const fields = card
-                ? parseWorldArchivistEntry("Location", card.entry ?? "")
-                : {};
-            return formatWorldArchivistTest("Status", [
-                `Enabled: ${config.archive}`,
-                `Allowed types: ${config.archiveTypes.join(", ") || "(none)"}`,
-                `Test card exists: ${Boolean(card)}`,
-                card ? `Metadata ID: ${metadata.id ?? "(missing)"}` : "",
-                card ? `Type: ${fields.Type ?? "(blank)"}` : "",
-                card ? `Region: ${fields.Region ?? "(blank)"}` : "",
-                card ? `Leader: ${fields.Leader ?? "(blank)"}` : "",
-                `Created: ${IS.WA.stats.created}`,
-                `Updated: ${IS.WA.stats.updated}`,
-                `Rejected: ${IS.WA.stats.rejected}`,
-                `Duplicates: ${IS.WA.stats.duplicates}`,
-                `Errors: ${IS.WA.stats.errors}`
-            ]);
+            const card = findWorldArchivistCard(
+                "Location",
+                WA_TEST_TITLE
+            );
+
+            return formatWorldArchivistTest(
+                "Status",
+                [
+                    `Enabled: ${config.archive}`,
+                    `Allowed types: ${
+                        config.archiveTypes.join(", ")
+                        || "(none)"
+                    }`,
+                    `Test card exists: ${Boolean(card)}`,
+                    card
+                        ? `Entry:\n${card.entry}`
+                        : "",
+                    `Scans: ${IS.WA.stats.scans}`,
+                    `None: ${IS.WA.stats.none}`,
+                    `Created: ${IS.WA.stats.created}`,
+                    `Updated: ${IS.WA.stats.updated}`,
+                    `Rejected: ${IS.WA.stats.rejected}`,
+                    `Duplicates: ${IS.WA.stats.duplicates}`,
+                    `Errors: ${IS.WA.stats.errors}`
+                ]
+            );
         };
+
         const finish = result => (
             (command === "status")
             ? result
             : `${result}\n\n${status()}`
         );
+
         if (command === "help") {
-            return finish(formatWorldArchivistTest("Commands", [
-                "/wa-test status",
-                "/wa-test create",
-                "/wa-test update",
-                "/wa-test clear",
-                "/wa-test collision",
-                "/wa-test blocked",
-                "/wa-test malformed",
-                "/wa-test cleanup"
-            ]));
+            return finish(
+                formatWorldArchivistTest(
+                    "Commands",
+                    [
+                        "/wa-test status",
+                        "/wa-test none",
+                        "/wa-test create",
+                        "/wa-test rewrite",
+                        "/wa-test unchanged",
+                        "/wa-test delete",
+                        "/wa-test collision",
+                        "/wa-test blocked",
+                        "/wa-test malformed",
+                        "/wa-test cleanup"
+                    ]
+                )
+            );
         }
+
         if (command === "status") {
             return status();
         }
+
+        if (command === "none") {
+            const {
+                operation,
+                result
+            } = execute(
+                "Story before. [world none] Story after."
+            );
+
+            return finish(
+                formatWorldArchivistTest(
+                    "None",
+                    [
+                        `Parsed: ${operation.valid}`,
+                        `Result: ${result.reason}`,
+                        `Cleaned: ${operation.rest}`
+                    ]
+                )
+            );
+        }
+
         if (command === "create") {
-            const { operation, result } = execute(
-                '(world_create `Location` | `World Archivist Test Site` | '
-                + '`World Archivist Test Site, WA Test Site` | '
-                + '`{"Type":"Settlement","Region":"Test Region",'
-                + '"Current condition":"Stable","Invented field":"Rejected"}`)'
+            const {
+                operation,
+                result
+            } = execute(
+                "Story before. "
+                + "[world create | Location | World Archivist Test Site:"
+                + " The World Archivist Test Site is a small settlement in Test Region."
+                + " It is used for deterministic archive tests.] "
+                + "Story after."
             );
-            const card = findWorldArchivistCard("Location", WA_TEST_TITLE);
-            return finish(formatWorldArchivistTest("Create", [
-                `Parsed: ${operation.valid}`,
-                `Result: ${result.reason}`,
-                `Card exists: ${Boolean(card)}`,
-                card ? `Entry:\n${card.entry}` : "",
-                card ? `Keys: ${card.keys}` : ""
-            ]));
-        }
-        if (command === "update") {
-            const { operation, result } = execute(
-                '(world_update `Location` | `World Archivist Test Site` | '
-                + '`{"Leader":"Archivist Ada","Current condition":"Expanded",'
-                + '"Temporary mood":"Ignored"}`)'
+
+            const card = findWorldArchivistCard(
+                "Location",
+                WA_TEST_TITLE
             );
-            const card = findWorldArchivistCard("Location", WA_TEST_TITLE);
-            return finish(formatWorldArchivistTest("Update", [
-                `Parsed: ${operation.valid}`,
-                `Result: ${result.reason}`,
-                card ? `Entry:\n${card.entry}` : "Test card not found."
-            ]));
-        }
-        if (command === "clear") {
-            const { operation, result } = execute(
-                '(world_clear `Location` | `World Archivist Test Site` | `Leader`)'
+
+            return finish(
+                formatWorldArchivistTest(
+                    "Create",
+                    [
+                        `Parsed: ${operation.valid}`,
+                        `Result: ${result.reason}`,
+                        `Card exists: ${Boolean(card)}`,
+                        card
+                            ? `Entry:\n${card.entry}`
+                            : "",
+                        `Cleaned: ${operation.rest}`
+                    ]
+                )
             );
-            const card = findWorldArchivistCard("Location", WA_TEST_TITLE);
-            const fields = card ? parseWorldArchivistEntry("Location", card.entry ?? "") : {};
-            return finish(formatWorldArchivistTest("Clear", [
-                `Parsed: ${operation.valid}`,
-                `Result: ${result.reason}`,
-                `Leader still present: ${Object.prototype.hasOwnProperty.call(fields, "Leader")}`,
-                card ? `Entry:\n${card.entry}` : "Test card not found."
-            ]));
         }
+
+        if (command === "rewrite") {
+            const {
+                operation,
+                result
+            } = execute(
+                "{world rewrite | Location | World Archivist Test Site:"
+                + " The World Archivist Test Site is a growing settlement in Test Region."
+                + " Archivist Ada currently oversees its archive.}"
+            );
+
+            const card = findWorldArchivistCard(
+                "Location",
+                WA_TEST_TITLE
+            );
+
+            return finish(
+                formatWorldArchivistTest(
+                    "Rewrite",
+                    [
+                        `Parsed: ${operation.valid}`,
+                        `Result: ${result.reason}`,
+                        card
+                            ? `Entry:\n${card.entry}`
+                            : "Test card not found."
+                    ]
+                )
+            );
+        }
+
+        if (command === "unchanged") {
+            const card = findWorldArchivistCard(
+                "Location",
+                WA_TEST_TITLE
+            );
+
+            if (!card) {
+                return finish(
+                    formatWorldArchivistTest(
+                        "Unchanged",
+                        ["Run /wa-test create first."]
+                    )
+                );
+            }
+
+            const source = (
+                "(world rewrite | Location | World Archivist Test Site:"
+                + ` ${card.entry})`
+            );
+
+            const {
+                operation,
+                result
+            } = execute(source);
+
+            return finish(
+                formatWorldArchivistTest(
+                    "Unchanged",
+                    [
+                        `Parsed: ${operation.valid}`,
+                        `Result: ${result.reason}`,
+                        "Expected: unchanged"
+                    ]
+                )
+            );
+        }
+
+        if (command === "delete") {
+            const {
+                operation,
+                result
+            } = execute(
+                "(world delete | Location | World Archivist Test Site)"
+            );
+
+            return finish(
+                formatWorldArchivistTest(
+                    "Delete",
+                    [
+                        `Parsed: ${operation.valid}`,
+                        `Result: ${result.reason}`,
+                        `Card still exists: ${Boolean(
+                            findWorldArchivistCard(
+                                "Location",
+                                WA_TEST_TITLE
+                            )
+                        )}`
+                    ]
+                )
+            );
+        }
+
         if (command === "collision") {
-            const operation = parseWorldArchivistOperation(
-                '(world_create `Location` | `Configure Inner Self` | '
-                + '`Configure Inner Self` | `{"Type":"Location"}`)'
+            const {
+                result
+            } = execute(
+                "[world create | Location | Configure Inner Self:"
+                + " Configure Inner Self is a protected manual card.]"
             );
-            const result = applyWorldArchivistOperation(
-                operation,
-                config,
-                history.length
+
+            return finish(
+                formatWorldArchivistTest(
+                    "Manual-card collision",
+                    [
+                        `Result: ${result.reason}`,
+                        "Expected: manual_collision"
+                    ]
+                )
             );
-            return finish(formatWorldArchivistTest("Manual-card collision", [
-                `Result: ${result.reason}`,
-                "Expected: manual_collision",
-                "The Configure Inner Self card should remain unchanged."
-            ]));
         }
+
         if (command === "blocked") {
-            const operation = parseWorldArchivistOperation(
-                '(world_create `Character` | `Blocked Test Character` | '
-                + '`Blocked Test Character` | `{"Race":"Human"}`)'
+            const operation =
+                parseWorldArchivistOperation(
+                    "[world create | Character | Blocked Test Character:"
+                    + " Blocked Test Character is human.]"
+                );
+
+            const result =
+                applyWorldArchivistOperation(
+                    operation,
+                    {
+                        ...config,
+                        archive: true,
+                        archiveTypes:
+                            config.archiveTypes.filter(
+                                type => (
+                                    type !== "Character"
+                                )
+                            )
+                    },
+                    history.length
+                );
+
+            return finish(
+                formatWorldArchivistTest(
+                    "Disabled category",
+                    [
+                        `Result: ${result.reason}`,
+                        "Expected: disabled type rejection"
+                    ]
+                )
             );
-            const blockedConfig = {
-                ...config,
-                archive: true,
-                archiveTypes: config.archiveTypes.filter(type => type !== "Character")
-            };
-            const result = applyWorldArchivistOperation(
-                operation,
-                blockedConfig,
-                history.length
-            );
-            return finish(formatWorldArchivistTest("Disabled category", [
-                `Result: ${result.reason}`,
-                "Expected: disabled_type",
-                `Character card created: ${Boolean(
-                    findWorldArchivistCard("Character", "Blocked Test Character")
-                )}`
-            ]));
         }
+
         if (command === "malformed") {
-            const operation = parseWorldArchivistOperation(
-                '(world_create `Location` | `Broken Test` | `Broken Test` | `{not json}`)'
-            );
-            const result = applyWorldArchivistOperation(
+            const {
                 operation,
-                config,
-                history.length
+                result
+            } = execute(
+                "[world rewrite this is malformed]"
             );
-            return finish(formatWorldArchivistTest("Malformed operation", [
-                `Matched: ${operation.matched}`,
-                `Valid: ${operation.valid}`,
-                `Result: ${result.reason}`,
-                "Expected: malformed"
-            ]));
+
+            return finish(
+                formatWorldArchivistTest(
+                    "Malformed operation",
+                    [
+                        `Matched: ${operation.matched}`,
+                        `Valid: ${operation.valid}`,
+                        `Result: ${result.reason}`,
+                        "Expected: malformed"
+                    ]
+                )
+            );
         }
+
         if (command === "cleanup") {
-            const removed = removeWorldArchivistTestCard();
-            return finish(formatWorldArchivistTest("Cleanup", [
-                `Test card removed: ${removed}`,
-                "No other Story Cards were touched."
-            ]));
+            const removed =
+                removeWorldArchivistTestCard();
+
+            return finish(
+                formatWorldArchivistTest(
+                    "Cleanup",
+                    [
+                        `Test card removed: ${removed}`,
+                        "No unrelated Story Cards were touched."
+                    ]
+                )
+            );
         }
-        return finish(formatWorldArchivistTest("Unknown command", [
-            `Unknown test: ${command}`,
-            "Use /wa-test help"
-        ]));
+
+        return finish(
+            formatWorldArchivistTest(
+                "Unknown command",
+                [
+                    `Unknown test: ${command}`,
+                    "Use /wa-test help"
+                ]
+            )
+        );
     };
+
     /**
      * Validated config settings for Inner Self
      * Default settings are specified by creators at the scenario level
