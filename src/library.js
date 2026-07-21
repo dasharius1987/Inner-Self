@@ -1377,6 +1377,753 @@ function InnerSelf(hook) {
         };
     };
 
+    // ==================== WORLD ARCHIVIST KEY-VALUE MEMORY LAYER ====================
+    // Automatic gameplay uses short Inner Self-style objective memories.
+    // The AI chooses the memory key and writes one concise objective sentence.
+    // JavaScript only performs exact-key storage and deletion.
+
+    const WA_MEMORY_KEY_LIMIT = 80;
+    const WA_MEMORY_VALUE_LIMIT = 500;
+    const WA_MEMORY_LIMIT_PER_CARD = 30;
+
+    /**
+     * Normalizes one AI-generated world-memory key.
+     * @param {*} key - Proposed key
+     * @returns {string} Stable snake_case key
+     */
+    const cleanWorldArchivistMemoryKey = (
+        key = ""
+    ) => (
+        (typeof key !== "string")
+        ? ""
+        : key
+            .replace(/[\u200B-\u200D]+/g, "")
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "_")
+            .replace(/^_+|_+$/g, "")
+            .replace(/_+/g, "_")
+            .slice(0, WA_MEMORY_KEY_LIMIT)
+    );
+
+    /**
+     * Parses a readable key/value Story Card entry.
+     * @param {string} entry - Existing card entry
+     * @returns {Object} Exact stored memories
+     */
+    const parseWorldArchivistMemories = (
+        entry = ""
+    ) => {
+        const memories = {};
+
+        if (typeof entry !== "string") {
+            return memories;
+        }
+
+        for (const raw of entry.split("\n")) {
+            const line = raw.trim();
+            const separator = line.indexOf(":");
+
+            if (separator < 1) {
+                continue;
+            }
+
+            const key = cleanWorldArchivistMemoryKey(
+                line.slice(0, separator)
+            );
+
+            const value = cleanWorldArchivistValue(
+                line.slice(separator + 1),
+                WA_MEMORY_VALUE_LIMIT
+            );
+
+            if (
+                (key !== "")
+                && (value !== "")
+            ) {
+                memories[key] = value;
+            }
+        }
+
+        return memories;
+    };
+
+    /**
+     * Renders memories as a readable key/value list.
+     * @param {Object} memories - Stored memories
+     * @returns {string} Story Card entry
+     */
+    const renderWorldArchivistMemories = (
+        memories = {}
+    ) => Object.entries(memories)
+        .filter(([key, value]) => (
+            cleanWorldArchivistMemoryKey(key) !== ""
+            && cleanWorldArchivistValue(
+                value,
+                WA_MEMORY_VALUE_LIMIT
+            ) !== ""
+        ))
+        .slice(0, WA_MEMORY_LIMIT_PER_CARD)
+        .map(([key, value]) => (
+            `${cleanWorldArchivistMemoryKey(key)}: ${
+                cleanWorldArchivistValue(
+                    value,
+                    WA_MEMORY_VALUE_LIMIT
+                )
+            }`
+        ))
+        .join("\n");
+
+    /**
+     * Creates or replaces one exact world-memory key.
+     * The same operation creates the card when it does not yet exist.
+     * @param {Object} request - Memory assignment
+     * @returns {Object} Result
+     */
+    const assignWorldArchivistMemory = ({
+        schema = "",
+        title = "",
+        key = "",
+        value = "",
+        enabledTypes = [],
+        turn = history.length
+    } = {}) => {
+        title = cleanWorldArchivistValue(
+            title,
+            100
+        );
+
+        key = cleanWorldArchivistMemoryKey(key);
+
+        value = cleanWorldArchivistValue(
+            value,
+            WA_MEMORY_VALUE_LIMIT
+        );
+
+        if (
+            !enabledTypes.includes(schema)
+            || !WA.types.includes(schema)
+        ) {
+            return {
+                ok: false,
+                reason: "disabled_type"
+            };
+        }
+
+        if (
+            (worldArchivistId(title) === "")
+            || (key === "")
+            || (value === "")
+        ) {
+            return {
+                ok: false,
+                reason: "invalid_memory"
+            };
+        }
+
+        const card = findWorldArchivistCard(
+            schema,
+            title
+        );
+
+        if (!card) {
+            return createWorldArchivistCard({
+                schema,
+                title,
+                entry: `${key}: ${value}`,
+                triggers: [title],
+                enabledTypes,
+                turn
+            });
+        }
+
+        const memories =
+            parseWorldArchivistMemories(
+                card.entry ?? ""
+            );
+
+        if (memories[key] === value) {
+            return {
+                ok: true,
+                reason: "unchanged",
+                card
+            };
+        }
+
+        const existed =
+            Object.prototype.hasOwnProperty.call(
+                memories,
+                key
+            );
+
+        memories[key] = value;
+
+        const result = rewriteWorldArchivistCard({
+            schema,
+            title,
+            entry:
+                renderWorldArchivistMemories(
+                    memories
+                ),
+            enabledTypes,
+            turn
+        });
+
+        if (
+            result.ok
+            && (result.reason === "rewritten")
+        ) {
+            result.reason = existed
+                ? "memory_updated"
+                : "memory_created";
+        }
+
+        return result;
+    };
+
+    /**
+     * Deletes one exact world-memory key.
+     * The owned Story Card is removed when its final memory disappears.
+     * @param {Object} request - Memory deletion
+     * @returns {Object} Result
+     */
+    const deleteWorldArchivistMemory = ({
+        schema = "",
+        title = "",
+        key = "",
+        enabledTypes = [],
+        turn = history.length
+    } = {}) => {
+        key = cleanWorldArchivistMemoryKey(key);
+
+        if (
+            !enabledTypes.includes(schema)
+            || !WA.types.includes(schema)
+        ) {
+            return {
+                ok: false,
+                reason: "disabled_type"
+            };
+        }
+
+        const card = findWorldArchivistCard(
+            schema,
+            title
+        );
+
+        if (!card) {
+            return {
+                ok: false,
+                reason: "not_found"
+            };
+        }
+
+        const memories =
+            parseWorldArchivistMemories(
+                card.entry ?? ""
+            );
+
+        if (
+            !Object.prototype.hasOwnProperty.call(
+                memories,
+                key
+            )
+        ) {
+            return {
+                ok: false,
+                reason: "memory_not_found"
+            };
+        }
+
+        delete memories[key];
+
+        if (Object.keys(memories).length === 0) {
+            return deleteWorldArchivistCard({
+                schema,
+                title,
+                enabledTypes
+            });
+        }
+
+        const result = rewriteWorldArchivistCard({
+            schema,
+            title,
+            entry:
+                renderWorldArchivistMemories(
+                    memories
+                ),
+            enabledTypes,
+            turn
+        });
+
+        if (
+            result.ok
+            && (result.reason === "rewritten")
+        ) {
+            result.reason = "memory_deleted";
+        }
+
+        return result;
+    };
+
+    /**
+     * Parses one compact world-memory operation from anywhere in output.
+     *
+     * Accepted:
+     * (world none)
+     * (world Location | The Greengrove | location_region = The forest lies west of the road.)
+     * (world Location | The Greengrove | delete location_region)
+     *
+     * @param {string} source - Model output
+     * @returns {Object} Parsed operation
+     */
+    const parseWorldArchivistMemoryOperation = (
+        source = ""
+    ) => {
+        if (typeof source !== "string") {
+            return {
+                matched: false,
+                valid: false,
+                rest: ""
+            };
+        }
+
+        const pairs = {
+            "(": ")",
+            "[": "]",
+            "{": "}"
+        };
+
+        const openerPattern =
+            /[\(\[\{]\s*world\b/ig;
+
+        let match;
+
+        while ((match = openerPattern.exec(source))) {
+            const start = match.index;
+            const opener = source[start];
+            const closer = pairs[opener];
+
+            let end = source.indexOf(
+                closer,
+                openerPattern.lastIndex
+            );
+
+            if (end === -1) {
+                const lineEnd = source.indexOf(
+                    "\n",
+                    openerPattern.lastIndex
+                );
+
+                end = (lineEnd === -1)
+                    ? source.length
+                    : lineEnd;
+            } else {
+                end += 1;
+            }
+
+            const raw = source.slice(start, end);
+
+            const inner = raw
+                .slice(
+                    1,
+                    raw.endsWith(closer)
+                        ? -1
+                        : undefined
+                )
+                .trim();
+
+            const rest = (
+                source.slice(0, start)
+                + source.slice(end)
+            )
+                .replace(/\n{3,}/g, "\n\n")
+                .trim();
+
+            if (
+                /^world[\s_-]+none\s*$/i.test(
+                    inner
+                )
+            ) {
+                return {
+                    matched: true,
+                    valid: true,
+                    kind: "none",
+                    raw,
+                    start,
+                    end,
+                    rest
+                };
+            }
+
+            const deletion = inner.match(
+                /^world\s+([^|:\n]+)\s*\|\s*([^|:\n]+)\s*\|\s*delete\s+([a-zA-Z0-9 _-]+)\s*$/i
+            );
+
+            if (deletion) {
+                const schema =
+                    deletion[1].trim();
+
+                const title =
+                    cleanWorldArchivistValue(
+                        deletion[2],
+                        100
+                    );
+
+                const key =
+                    cleanWorldArchivistMemoryKey(
+                        deletion[3]
+                    );
+
+                return {
+                    matched: true,
+                    valid: (
+                        WA.types.includes(schema)
+                        && (title !== "")
+                        && (key !== "")
+                    ),
+                    kind: "delete_memory",
+                    schema,
+                    title,
+                    key,
+                    raw,
+                    start,
+                    end,
+                    rest
+                };
+            }
+
+            const assignment = inner.match(
+                /^world\s+([^|:\n]+)\s*\|\s*([^|:\n]+)\s*\|\s*([^=\n]+?)\s*=\s*([\s\S]+)$/i
+            );
+
+            if (assignment) {
+                const schema =
+                    assignment[1].trim();
+
+                const title =
+                    cleanWorldArchivistValue(
+                        assignment[2],
+                        100
+                    );
+
+                const key =
+                    cleanWorldArchivistMemoryKey(
+                        assignment[3]
+                    );
+
+                const value =
+                    cleanWorldArchivistValue(
+                        assignment[4],
+                        WA_MEMORY_VALUE_LIMIT
+                    );
+
+                return {
+                    matched: true,
+                    valid: (
+                        WA.types.includes(schema)
+                        && (title !== "")
+                        && (key !== "")
+                        && (value !== "")
+                    ),
+                    kind: "assign_memory",
+                    schema,
+                    title,
+                    key,
+                    value,
+                    raw,
+                    start,
+                    end,
+                    rest
+                };
+            }
+
+            return {
+                matched: true,
+                valid: false,
+                kind: "malformed_memory",
+                raw,
+                start,
+                end,
+                rest
+            };
+        }
+
+        return {
+            matched: false,
+            valid: false,
+            kind: "missing",
+            rest: source
+        };
+    };
+
+    /**
+     * Applies one compact world-memory operation.
+     * @param {Object} operation - Parsed operation
+     * @param {config} config - Runtime configuration
+     * @param {number} turn - Current turn
+     * @returns {Object} Result
+     */
+    const applyWorldArchivistMemoryOperation = (
+        operation = {},
+        config = {},
+        turn = history.length
+    ) => {
+        if (!config.archive) {
+            countWorldArchivistResult("rejected");
+
+            return {
+                ok: false,
+                reason: "disabled"
+            };
+        }
+
+        if (
+            !operation.matched
+            || !operation.valid
+        ) {
+            countWorldArchivistResult("errors");
+
+            return {
+                ok: false,
+                reason: operation.matched
+                    ? "malformed"
+                    : "missing"
+            };
+        }
+
+        if (operation.kind === "none") {
+            countWorldArchivistResult("none");
+
+            return {
+                ok: true,
+                reason: "none"
+            };
+        }
+
+        let result;
+
+        if (
+            operation.kind
+            === "assign_memory"
+        ) {
+            result = assignWorldArchivistMemory({
+                schema: operation.schema,
+                title: operation.title,
+                key: operation.key,
+                value: operation.value,
+                enabledTypes:
+                    config.archiveTypes,
+                turn
+            });
+        } else if (
+            operation.kind
+            === "delete_memory"
+        ) {
+            result = deleteWorldArchivistMemory({
+                schema: operation.schema,
+                title: operation.title,
+                key: operation.key,
+                enabledTypes:
+                    config.archiveTypes,
+                turn
+            });
+        } else {
+            countWorldArchivistResult("errors");
+
+            return {
+                ok: false,
+                reason: "unknown_operation"
+            };
+        }
+
+        if (result.ok) {
+            if (result.reason === "created") {
+                countWorldArchivistResult(
+                    "created"
+                );
+            } else if (
+                [
+                    "memory_created",
+                    "memory_updated",
+                    "memory_deleted",
+                    "deleted"
+                ].includes(result.reason)
+            ) {
+                countWorldArchivistResult(
+                    "updated"
+                );
+            }
+        } else if (
+            [
+                "manual_collision",
+                "already_exists"
+            ].includes(result.reason)
+        ) {
+            countWorldArchivistResult(
+                "duplicates"
+            );
+        } else {
+            countWorldArchivistResult(
+                "rejected"
+            );
+        }
+
+        return result;
+    };
+
+    /**
+     * Displays a compact index of existing memories for model key reuse.
+     * @param {string[]} enabledTypes - Enabled schemas
+     * @returns {string} Existing memory context
+     */
+    const buildWorldArchivistMemoryIndex = (
+        enabledTypes = []
+    ) => {
+        const output = [];
+
+        for (const card of storyCards) {
+            const metadata =
+                readWorldArchivistMetadata(card);
+
+            if (
+                !enabledTypes.includes(
+                    metadata.schema
+                )
+                || (typeof card.title !== "string")
+            ) {
+                continue;
+            }
+
+            const memories =
+                parseWorldArchivistMemories(
+                    card.entry ?? ""
+                );
+
+            output.push(
+                `${metadata.schema} | ${card.title}\n`
+                + Object.entries(memories)
+                    .slice(0, 12)
+                    .map(([key, value]) => (
+                        `${key}: ${value}`
+                    ))
+                    .join("\n")
+            );
+
+            if (3 <= output.length) {
+                break;
+            }
+        }
+
+        return output.length
+            ? output.join("\n\n")
+            : "(none)";
+    };
+
+    /**
+     * Builds a deliberately compact Inner Self-style world-memory task.
+     * @param {config} config - Runtime configuration
+     * @returns {string} Task prompt
+     */
+    const buildWorldArchivistMemoryTask = (
+        config = {}
+    ) => {
+        const blueprints =
+            config.archiveTypes
+                .map(schema => (
+                    `${schema}: ${
+                        worldArchivistSchema(
+                            schema
+                        ).join(", ")
+                    }`
+                ))
+                .join("\n");
+
+        return `
+<SYSTEM>
+# WORLD ARCHIVIST TASK-CHANNEL FIX
+You must output exactly one short parenthetical world-memory operation first, followed immediately by the normal story continuation.
+
+The first character of the whole output must be "(".
+Choose exactly one form:
+
+(world none) Story continuation...
+
+(world TYPE | TITLE | memory_key = One concise objective third-person sentence.) Story continuation...
+
+(world TYPE | TITLE | delete memory_key) Story continuation...
+
+Rules:
+- Use only these enabled TYPE values: ${config.archiveTypes.join(", ")}.
+- TITLE must be the exact name of one world entity established by the story.
+- Reuse an existing exact memory_key when it already covers the same information.
+- Otherwise invent one short snake_case memory_key.
+- Store only durable objective world information, not narration, actions, dialogue, speculation, or temporary details.
+- Use (world none) when no useful durable fact is established.
+- The operation must contain only one memory sentence.
+- Do not add extra parentheses, explanations, labels, headings, or formatting.
+- After the closing parenthesis, continue the story normally.
+- The story continuation must occupy most of the response.
+
+Blueprint guidance only:
+${blueprints}
+
+Existing World Archivist memories:
+${buildWorldArchivistMemoryIndex(
+    config.archiveTypes
+)}
+
+Follow the format perfectly.
+</SYSTEM>
+`.trim();
+    };
+
+    /**
+     * Reserves one otherwise-unused Inner Self task slot.
+     * @param {config} config - Runtime configuration
+     * @returns {string} Task or empty string
+     */
+    const requestWorldArchivistMemoryTask = (
+        config = {}
+    ) => {
+        if (
+            !config.archive
+            || !Array.isArray(
+                config.archiveTypes
+            )
+            || (
+                config.archiveTypes.length
+                === 0
+            )
+            || IS.WA.pending
+        ) {
+            return "";
+        }
+
+        const hash = historyHash();
+
+        if (IS.WA.hash === hash) {
+            return "";
+        }
+
+        IS.WA.enabled = true;
+        IS.WA.pending = {
+            hash,
+            turn: history.length,
+            mode: "memory"
+        };
+        IS.WA.lastScanTurn =
+            history.length;
+
+        countWorldArchivistResult(
+            "scans"
+        );
+
+        return buildWorldArchivistMemoryTask(
+            config
+        );
+    };
+
     // ==================== WORLD ARCHIVIST TEST COMMANDS ====================
     // Deterministic tests for complete prose Story Card operations.
 
@@ -2492,8 +3239,16 @@ ${lines.filter(Boolean).join("\n")}
                 }
             }
         }
-        if (!config.allow) {
-            // Early exit if Inner Self is disabled
+        // WORLD ARCHIVIST TASK-CHANNEL FIX:
+        // Make Inner Self's task delimiter available to every free-slot branch.
+        const boundary = Object.freeze({
+            needle: "Recent Story:",
+            upper: "<|story|>",
+            lower: "<|task|>"
+        });
+
+        if (!config.allow && !config.archive) {
+            // Neither subsystem needs a model task.
             IS.encoding = "";
             text ||= " ";
             return;
@@ -2509,10 +3264,24 @@ ${lines.filter(Boolean).join("\n")}
             }
             return;
         };
-        if (config.agents.length === 0) {
-            // No agents are configured
+        if (
+            !config.allow
+            || (config.agents.length === 0)
+        ) {
             deindicateAll();
             unzero();
+
+            const archiveTask =
+                requestWorldArchivistMemoryTask(
+                    config
+                );
+
+            if (archiveTask !== "") {
+                text = `${text.trim()}${boundary.lower}${archiveTask}
+
+`;
+            }
+
             return;
         }
         // ==================== AGENT TRIGGER DETECTION ====================
@@ -2575,6 +3344,18 @@ ${lines.filter(Boolean).join("\n")}
             // Do fancy standoff spacing leading ahead of the next output
             IS.encoding = "";
             IS.agent = " ";
+
+            const archiveTask =
+                requestWorldArchivistMemoryTask(
+                    config
+                );
+
+            if (archiveTask !== "") {
+                text = `${text.trim()}${boundary.lower}${archiveTask}
+
+`;
+            }
+
             text ||= " ";
             return;
         } else {
@@ -2590,15 +3371,8 @@ ${lines.filter(Boolean).join("\n")}
                 }
             }
         }
-        // Temporary markers used to reliably identify sections of the context for later calculations
-        const boundary = Object.freeze({
-            // Hardcoded AID context header
-            needle: "Recent Story:",
-            // Marks start of recent story
-            upper: "<|story|>",
-            // Marks start of task instructions
-            lower: "<|task|>"
-        });
+        // Temporary markers used to reliably identify sections of the context for later calculations.
+        // `boundary` is declared earlier so World Archivist can share this task channel.
         /**
          * Replaces a substring in text with a replacement string
          * Expands to consume surrounding whitespace
@@ -3387,9 +4161,19 @@ Follow the format **perfectly**.
                 // config.half -> reduce task chance after Do/Say/Story actions (player is driving)
                 "do", "say", "story"
             ].includes(getPrevAction()?.type)) ? 200 : 100)) < Math.random()) ? (
-                // Sometimes do nothing and emit a side effect on IS.agent
-                (IS.agent = " "),
-                `${nondirective()}${self}${text.trim()} `
+                // Inner Self skips its thought; Archivist may use the same slot.
+                (() => {
+                    IS.agent = " ";
+
+                    const archiveTask =
+                        requestWorldArchivistMemoryTask(
+                            config
+                        );
+
+                    return (archiveTask === "")
+                        ? `${nondirective()}${self}${text.trim()} `
+                        : `${nondirective()}${self}${text.trim()}${boundary.lower}${archiveTask}\n\n`;
+                })()
             ) : `${prompt.directive[pov]}${self}${text.trim()}${boundary.lower}${(
                 // Low context = simple prompt, high context = advanced prompt
                 (limit < 20000) ? prompt.assign[pov] : prompt.choice[pov]
@@ -3496,14 +4280,78 @@ Follow the format **perfectly**.
     /** @type {config} */
     const config = Config.get();
     // ==================== WORLD ARCHIVIST OUTPUT INTEGRATION ====================
-    // Parse a hidden World Archivist operation before normal output cleanup.
-    // This is dormant unless the output explicitly begins with "(world_".
-    const worldArchiveExtraction = extractWorldArchivistOperation(text);
-    const worldArchiveOperation = worldArchiveExtraction.operation;
-    if (worldArchiveOperation.matched) {
-        // Never expose recognized maintenance syntax in visible story prose.
-        text = worldArchiveExtraction.text;
+    // Automatic gameplay uses compact Inner Self-style world memories.
+    const worldMemoryOperation = IS.WA.pending
+        ? parseWorldArchivistMemoryOperation(
+            text
+        )
+        : {
+            matched: false,
+            valid: false,
+            kind: "inactive",
+            rest: text
+        };
+
+    if (worldMemoryOperation.matched) {
+        text =
+            worldMemoryOperation.rest
+            || " ";
     }
+
+    // Execute before Inner Self's taskless-output early return.
+    if (IS.WA.pending) {
+        const pending = IS.WA.pending;
+
+        if (
+            IS.WA.hash
+            === pending.hash
+        ) {
+            countWorldArchivistResult(
+                "duplicates"
+            );
+        } else {
+            IS.WA.hash = pending.hash;
+
+            const result =
+                applyWorldArchivistMemoryOperation(
+                    worldMemoryOperation,
+                    config,
+                    history.length
+                );
+
+            IS.WA.operation = {
+                kind:
+                    worldMemoryOperation.kind
+                    ?? "missing",
+                schema:
+                    worldMemoryOperation.schema
+                    ?? "",
+                title:
+                    worldMemoryOperation.title
+                    ?? "",
+                key:
+                    worldMemoryOperation.key
+                    ?? "",
+                result:
+                    result?.reason
+                    ?? "unknown",
+                turn:
+                    history.length
+            };
+
+            IS.WA.lastTurn =
+                history.length;
+        }
+
+        IS.WA.pending = null;
+    }
+
+    // Preserve compatibility with the deterministic prose operation suite.
+    const worldArchiveOperation = {
+        matched: false,
+        valid: false,
+        kind: "inactive"
+    };
     /**
      * Ensures clean visual separation between actions
      * Only applies after "continue" or "story" actions
@@ -4102,36 +4950,7 @@ I hope you will have lots of fun!
     // Execute queued World Archivist and brain operations independently.
     const hash = historyHash();
 
-    // World Archivist does not require an active NPC or Inner Self brain operation.
-    if (worldArchiveOperation.matched) {
-        if (IS.WA.hash === hash) {
-            // Retry or erase-and-continue replay of the same generated output.
-            countWorldArchivistResult("duplicates");
-            debugWorldArchivist(
-                config.debug,
-                "Skipped duplicate operation for repeated history"
-            );
-        } else {
-            // Mark the history state before applying the operation so a partially
-            // rejected or malformed command is not repeatedly processed on Retry.
-            IS.WA.hash = hash;
-            IS.WA.operation = {
-                kind: worldArchiveOperation.kind ?? "malformed",
-                schema: worldArchiveOperation.schema ?? "",
-                title: worldArchiveOperation.title ?? "",
-                turn: history.length
-            };
-            const worldArchiveResult = applyWorldArchivistOperation(
-                worldArchiveOperation,
-                config,
-                history.length
-            );
-            IS.WA.lastTurn = history.length;
-            IS.WA.operation.result = worldArchiveResult?.reason ?? "unknown";
-            // No task remains pending after an output operation is handled.
-            IS.WA.pending = null;
-        }
-    }
+    // World Archivist memory execution already occurred above.
 
     // Inner Self brain execution retains its original independent behavior.
     if ((operations.length === 0) || (agent === null)) {
