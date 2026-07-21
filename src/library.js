@@ -849,6 +849,280 @@ function InnerSelf(hook) {
             turn
         });
     };
+    // ==================== WORLD ARCHIVIST OPERATION PROTOCOL ====================
+    // Step 3 defines strict hidden command parsing and deterministic execution.
+    // The AI is not instructed to produce these operations until a later step.
+    /**
+     * Parses a JSON object used by a World Archivist operation.
+     * Only plain objects with string values are accepted.
+     * @param {string} source - Raw JSON
+     * @returns {Object|null} Valid object or null
+     */
+    const parseWorldArchivistFieldJSON = (source = "") => {
+        const parsed = deserialize(source);
+        if (
+            !parsed || (typeof parsed !== "object") || Array.isArray(parsed)
+            || (Object.getPrototypeOf(parsed) !== Object.prototype)
+        ) {
+            return null;
+        }
+        const fields = {};
+        for (const [key, value] of Object.entries(parsed)) {
+            if ((typeof key !== "string") || (typeof value !== "string")) {
+                return null;
+            }
+            fields[key] = value;
+        }
+        return fields;
+    };
+    /**
+     * Parses one strict World Archivist operation from the beginning of model output.
+     * Backticks delimit user-controlled values and prevent ambiguous pipe splitting.
+     * @param {string} source - Model output
+     * @returns {Object} Parse result
+     */
+    const parseWorldArchivistOperation = (source = "") => {
+        if (typeof source !== "string") {
+            return { matched: false, valid: false, consumed: 0, rest: "" };
+        }
+        const leading = source.match(/^\s*/)?.[0] ?? "";
+        const body = source.slice(leading.length);
+        const none = body.match(/^\(world_none\)/);
+        if (none) {
+            const consumed = leading.length + none[0].length;
+            return {
+                matched: true,
+                valid: true,
+                kind: "none",
+                consumed,
+                raw: source.slice(0, consumed),
+                rest: source.slice(consumed).replace(/^\s+/, "")
+            };
+        }
+        const create = body.match(
+            /^\(world_create\s+`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]*)`\s*\|\s*`([^`]*)`\)/
+        );
+        if (create) {
+            const consumed = leading.length + create[0].length;
+            const fields = parseWorldArchivistFieldJSON(create[4]);
+            return {
+                matched: true,
+                valid: fields !== null,
+                kind: "create",
+                schema: create[1].trim(),
+                title: create[2].trim(),
+                triggers: create[3].split(",").map(trigger => trigger.trim()).filter(Boolean),
+                fields: fields ?? {},
+                consumed,
+                raw: source.slice(0, consumed),
+                rest: source.slice(consumed).replace(/^\s+/, "")
+            };
+        }
+        const update = body.match(
+            /^\(world_update\s+`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]*)`\)/
+        );
+        if (update) {
+            const consumed = leading.length + update[0].length;
+            const fields = parseWorldArchivistFieldJSON(update[3]);
+            return {
+                matched: true,
+                valid: fields !== null,
+                kind: "update",
+                schema: update[1].trim(),
+                title: update[2].trim(),
+                fields: fields ?? {},
+                consumed,
+                raw: source.slice(0, consumed),
+                rest: source.slice(consumed).replace(/^\s+/, "")
+            };
+        }
+        const clear = body.match(
+            /^\(world_clear\s+`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\)/
+        );
+        if (clear) {
+            const consumed = leading.length + clear[0].length;
+            return {
+                matched: true,
+                valid: true,
+                kind: "clear",
+                schema: clear[1].trim(),
+                title: clear[2].trim(),
+                field: clear[3].trim(),
+                consumed,
+                raw: source.slice(0, consumed),
+                rest: source.slice(consumed).replace(/^\s+/, "")
+            };
+        }
+        if (body.startsWith("(world_")) {
+            const closing = body.indexOf(")");
+            const consumed = (
+                closing === -1
+                ? leading.length
+                : leading.length + closing + 1
+            );
+            return {
+                matched: true,
+                valid: false,
+                kind: "malformed",
+                consumed,
+                raw: source.slice(0, consumed),
+                rest: source.slice(consumed).replace(/^\s+/, "")
+            };
+        }
+        return {
+            matched: false,
+            valid: false,
+            consumed: 0,
+            rest: source
+        };
+    };
+    /**
+     * Records one World Archivist result in persistent statistics.
+     * @param {string} key - Statistics key
+     * @returns {void}
+     */
+    const countWorldArchivistResult = (key = "") => {
+        if (
+            IS.WA?.stats
+            && Object.prototype.hasOwnProperty.call(IS.WA.stats, key)
+            && Number.isInteger(IS.WA.stats[key])
+        ) {
+            IS.WA.stats[key]++;
+        }
+        return;
+    };
+    /**
+     * Emits a concise World Archivist debug message using Inner Self debug mode.
+     * @param {boolean} enabled - Whether debug output is enabled
+     * @param {string} message - Debug message
+     * @returns {void}
+     */
+    const debugWorldArchivist = (enabled = false, message = "") => {
+        if (enabled && (typeof message === "string") && (message !== "")) {
+            log(`[WA] ${message}`);
+        }
+        return;
+    };
+    /**
+     * Applies one already-parsed World Archivist operation.
+     * This is deterministic JavaScript and does not consult the story model.
+     * @param {Object} operation - Result of parseWorldArchivistOperation
+     * @param {Object} config - Validated Inner Self configuration
+     * @param {number} turn - Current history turn
+     * @returns {Object} Execution result
+     */
+    const applyWorldArchivistOperation = (
+        operation = {},
+        config = {},
+        turn = history.length
+    ) => {
+        const reject = (reason = "rejected") => {
+            countWorldArchivistResult("rejected");
+            debugWorldArchivist(config.debug, `Rejected operation: ${reason}`);
+            return { ok: false, reason };
+        };
+        if (!config.archive) {
+            return reject("disabled");
+        }
+        if (!operation.matched) {
+            return reject("not_world_archivist_operation");
+        }
+        if (!operation.valid) {
+            countWorldArchivistResult("errors");
+            debugWorldArchivist(config.debug, "Malformed operation");
+            return { ok: false, reason: "malformed" };
+        }
+        if (operation.kind === "none") {
+            countWorldArchivistResult("none");
+            debugWorldArchivist(config.debug, "No durable verified change");
+            return { ok: true, reason: "none" };
+        }
+        if (!config.archiveTypes.includes(operation.schema)) {
+            return reject(`disabled type: ${operation.schema}`);
+        }
+        let result;
+        if (operation.kind === "create") {
+            result = createWorldArchivistCard({
+                schema: operation.schema,
+                title: operation.title,
+                triggers: operation.triggers,
+                fields: operation.fields,
+                enabledTypes: config.archiveTypes,
+                turn
+            });
+            if (result.ok) {
+                countWorldArchivistResult("created");
+                debugWorldArchivist(
+                    config.debug,
+                    `Created ${operation.schema}: ${operation.title}`
+                );
+            }
+        } else if (operation.kind === "update") {
+            result = updateWorldArchivistCard({
+                schema: operation.schema,
+                title: operation.title,
+                fields: operation.fields,
+                enabledTypes: config.archiveTypes,
+                turn
+            });
+            if (result.ok && (result.reason === "updated")) {
+                countWorldArchivistResult("updated");
+                debugWorldArchivist(
+                    config.debug,
+                    `Updated ${operation.schema}: ${operation.title}`
+                );
+            } else if (result.ok && (result.reason === "unchanged")) {
+                debugWorldArchivist(
+                    config.debug,
+                    `No field changes for ${operation.schema}: ${operation.title}`
+                );
+            }
+        } else if (operation.kind === "clear") {
+            result = clearWorldArchivistField({
+                schema: operation.schema,
+                title: operation.title,
+                field: operation.field,
+                enabledTypes: config.archiveTypes,
+                turn
+            });
+            if (result.ok && (result.reason === "updated")) {
+                countWorldArchivistResult("updated");
+                debugWorldArchivist(
+                    config.debug,
+                    `Cleared ${operation.schema}.${operation.field}: ${operation.title}`
+                );
+            }
+        } else {
+            return reject("unknown_operation");
+        }
+        if (!result?.ok) {
+            if (result?.reason === "manual_collision") {
+                countWorldArchivistResult("duplicates");
+            } else if (result?.reason === "already_exists") {
+                countWorldArchivistResult("duplicates");
+            } else {
+                countWorldArchivistResult("rejected");
+            }
+            debugWorldArchivist(
+                config.debug,
+                `${operation.kind} failed: ${result?.reason ?? "unknown"}`
+            );
+        }
+        return result ?? { ok: false, reason: "missing_result" };
+    };
+    /**
+     * Removes a recognized World Archivist prefix while preserving story prose.
+     * Invalid operations are removed only when they clearly begin with "(world_".
+     * @param {string} source - Model output
+     * @returns {Object} Parsed operation and cleaned story text
+     */
+    const extractWorldArchivistOperation = (source = "") => {
+        const operation = parseWorldArchivistOperation(source);
+        return {
+            operation,
+            text: operation.matched ? (operation.rest || " ") : source
+        };
+    };
     /**
      * Validated config settings for Inner Self
      * Default settings are specified by creators at the scenario level
