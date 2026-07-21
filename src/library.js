@@ -539,6 +539,316 @@ function InnerSelf(hook) {
         JSON.stringify(metadata),
         (typeof notes === "string") ? notes.trim() : ""
     ].filter((part, index) => (index < 2) || (part !== "")).join("\n\n");
+    // ==================== WORLD ARCHIVIST STORY CARD DATA LAYER ====================
+    // Step 2 provides deterministic card parsing and mutation helpers.
+    // Nothing calls these helpers automatically until later lifecycle integration steps.
+    const WA_GENERIC_TRIGGERS = new Set([
+        "character", "person", "people", "location", "place", "region", "village",
+        "town", "city", "forest", "race", "species", "class", "profession", "job",
+        "faction", "group", "guild", "kingdom", "nation", "custom", "world", "thing"
+    ]);
+    /**
+     * Returns user-authored notes stored after World Archivist metadata.
+     * @param {Object} card - Story card
+     * @returns {string} Notes following the metadata block
+     */
+    const readWorldArchivistNotes = (card = {}) => {
+        if ((typeof card.description !== "string") || !card.description.startsWith(WA.marker)) {
+            return "";
+        }
+        const remainder = card.description.slice(WA.marker.length).replace(/^\s*\n?/, "");
+        const newline = remainder.indexOf("\n");
+        return (newline === -1) ? "" : remainder.slice(newline + 1).trim();
+    };
+    /**
+     * Returns the ordered field list for a supported schema.
+     * @param {string} schema - World Archivist schema name
+     * @returns {string[]} Defensive copy of the field list
+     */
+    const worldArchivistSchema = (schema = "") => (
+        Array.isArray(WA.schemas[schema]) ? [...WA.schemas[schema]] : []
+    );
+    /**
+     * Cleans a field value without inventing or interpreting information.
+     * @param {*} value - Proposed field value
+     * @param {number} limit - Maximum stored characters
+     * @returns {string} Clean single-line value
+     */
+    const cleanWorldArchivistValue = (value = "", limit = 500) => (
+        (typeof value === "string")
+        ? value.replace(/[\u200B-\u200D]+/g, "").replace(/\s+/g, " ").trim().slice(0, limit)
+        : ""
+    );
+    /**
+     * Filters a field object down to fields explicitly allowed by its schema.
+     * Empty values are retained only when clearEmpty is enabled.
+     * @param {string} schema - World Archivist schema name
+     * @param {Object} fields - Proposed fields
+     * @param {boolean} clearEmpty - Preserve empty strings as explicit clears
+     * @returns {Object} Canonically ordered validated fields
+     */
+    const validateWorldArchivistFields = (schema = "", fields = {}, clearEmpty = false) => {
+        const valid = {};
+        if (!fields || (typeof fields !== "object") || Array.isArray(fields)) {
+            return valid;
+        }
+        for (const field of worldArchivistSchema(schema)) {
+            if (!Object.prototype.hasOwnProperty.call(fields, field)) {
+                continue;
+            }
+            const value = cleanWorldArchivistValue(fields[field]);
+            if ((value !== "") || clearEmpty) {
+                valid[field] = value;
+            }
+        }
+        return valid;
+    };
+    /**
+     * Parses a formal World Archivist entry into known schema fields.
+     * Unknown prose and unknown labels are intentionally ignored.
+     * @param {string} schema - World Archivist schema name
+     * @param {string} entry - Existing story card entry
+     * @returns {Object} Parsed field object
+     */
+    const parseWorldArchivistEntry = (schema = "", entry = "") => {
+        const allowed = new Set(worldArchivistSchema(schema));
+        const fields = {};
+        if ((allowed.size === 0) || (typeof entry !== "string")) {
+            return fields;
+        }
+        for (const raw of entry.split("\n")) {
+            const line = raw.trim();
+            const colon = line.indexOf(":");
+            if (colon < 1) {
+                continue;
+            }
+            const field = line.slice(0, colon).trim();
+            if (!allowed.has(field)) {
+                continue;
+            }
+            const value = cleanWorldArchivistValue(line.slice(colon + 1));
+            if (value !== "") {
+                fields[field] = value;
+            }
+        }
+        return fields;
+    };
+    /**
+     * Renders known fields in canonical blueprint order.
+     * @param {string} schema - World Archivist schema name
+     * @param {Object} fields - Validated fields
+     * @returns {string} Formal story card entry
+     */
+    const renderWorldArchivistEntry = (schema = "", fields = {}) => worldArchivistSchema(schema)
+        .filter(field => (typeof fields[field] === "string") && (fields[field].trim() !== ""))
+        .map(field => `${field}: ${cleanWorldArchivistValue(fields[field])}`)
+        .join("\n");
+    /**
+     * Produces conservative Story Card trigger keys.
+     * Exact title is always first; generic category-only triggers are rejected.
+     * @param {string} title - Entity title
+     * @param {string|string[]} proposed - Additional triggers
+     * @returns {string[]} At most four unique triggers
+     */
+    const cleanWorldArchivistTriggers = (title = "", proposed = []) => {
+        title = cleanWorldArchivistValue(title, 100);
+        const source = Array.isArray(proposed) ? proposed : String(proposed).split(",");
+        const output = [];
+        const seen = new Set();
+        for (const trigger of [title, ...source]) {
+            const clean = cleanWorldArchivistValue(trigger, 80).replaceAll(",", "");
+            const lower = clean.toLowerCase();
+            if (
+                (clean === "") || seen.has(lower)
+                || WA_GENERIC_TRIGGERS.has(lower)
+            ) {
+                continue;
+            }
+            seen.add(lower);
+            output.push(clean);
+            if (4 <= output.length) {
+                break;
+            }
+        }
+        return output;
+    };
+    /**
+     * Locates a World Archivist-owned card by stable ID and schema.
+     * @param {string} schema - World Archivist schema name
+     * @param {string} titleOrId - Display title or normalized metadata ID
+     * @returns {Object|null} Matching card reference
+     */
+    const findWorldArchivistCard = (schema = "", titleOrId = "") => {
+        const id = worldArchivistId(titleOrId);
+        if (!WA.types.includes(schema) || (id === "")) {
+            return null;
+        }
+        for (const card of storyCards) {
+            const metadata = readWorldArchivistMetadata(card);
+            if ((metadata.schema === schema) && (metadata.id === id)) {
+                return card;
+            }
+        }
+        return null;
+    };
+    /**
+     * Finds any non-Archivist card with the same normalized title.
+     * Brain cards and manual cards both count as protected collisions.
+     * @param {string} title - Proposed title
+     * @returns {Object|null} Conflicting card reference
+     */
+    const findWorldArchivistTitleCollision = (title = "") => {
+        const id = worldArchivistId(title);
+        if (id === "") {
+            return null;
+        }
+        for (const card of storyCards) {
+            if (!card || (typeof card !== "object") || Array.isArray(card)) {
+                continue;
+            }
+            if (worldArchivistId(card.title ?? "") !== id) {
+                continue;
+            }
+            if (Object.keys(readWorldArchivistMetadata(card)).length === 0) {
+                return card;
+            }
+        }
+        return null;
+    };
+    /**
+     * Creates one owned formal Story Card without model involvement.
+     * @param {Object} request - Creation request
+     * @param {string} request.schema - Enabled World Archivist schema
+     * @param {string} request.title - Display title
+     * @param {string|string[]} request.triggers - Proposed trigger keys
+     * @param {Object} request.fields - Verified schema fields
+     * @param {string[]} request.enabledTypes - Runtime-enabled schemas
+     * @param {number} request.turn - Current history turn
+     * @returns {Object} Result object with status and optional card
+     */
+    const createWorldArchivistCard = ({
+        schema = "", title = "", triggers = [], fields = {}, enabledTypes = [], turn = history.length
+    } = {}) => {
+        title = cleanWorldArchivistValue(title, 100);
+        const enabled = new Set(enabledTypes);
+        if (!enabled.has(schema) || !WA.types.includes(schema)) {
+            return { ok: false, reason: "disabled_type" };
+        }
+        const id = worldArchivistId(title);
+        if (id === "") {
+            return { ok: false, reason: "invalid_title" };
+        }
+        if (findWorldArchivistCard(schema, id)) {
+            return { ok: false, reason: "already_exists" };
+        }
+        if (findWorldArchivistTitleCollision(title)) {
+            return { ok: false, reason: "manual_collision" };
+        }
+        const valid = validateWorldArchivistFields(schema, fields);
+        valid.Name = title;
+        const entry = renderWorldArchivistEntry(schema, valid);
+        if (entry === "") {
+            return { ok: false, reason: "empty_entry" };
+        }
+        const keys = cleanWorldArchivistTriggers(title, triggers);
+        const metadata = {
+            version: WA.version,
+            id,
+            schema,
+            createdTurn: Number.isInteger(turn) ? turn : history.length,
+            updatedTurn: Number.isInteger(turn) ? turn : history.length
+        };
+        const card = addStoryCard(
+            keys.join(", "),
+            entry,
+            schema.toLowerCase(),
+            title,
+            writeWorldArchivistMetadata(metadata),
+            { returnCard: true }
+        );
+        return card
+            ? { ok: true, reason: "created", card }
+            : { ok: false, reason: "creation_failed" };
+    };
+    /**
+     * Updates only explicit verified fields on an owned Story Card.
+     * Existing fields not present in the update remain untouched.
+     * @param {Object} request - Update request
+     * @param {string} request.schema - Enabled World Archivist schema
+     * @param {string} request.title - Existing entity title or ID
+     * @param {Object} request.fields - Explicit field changes
+     * @param {string[]} request.enabledTypes - Runtime-enabled schemas
+     * @param {string|string[]} request.triggers - Optional additional trigger keys
+     * @param {number} request.turn - Current history turn
+     * @returns {Object} Result object with status and optional card
+     */
+    const updateWorldArchivistCard = ({
+        schema = "", title = "", fields = {}, enabledTypes = [], triggers = null, turn = history.length
+    } = {}) => {
+        if (!new Set(enabledTypes).has(schema) || !WA.types.includes(schema)) {
+            return { ok: false, reason: "disabled_type" };
+        }
+        const card = findWorldArchivistCard(schema, title);
+        if (!card) {
+            return { ok: false, reason: "not_found" };
+        }
+        const changes = validateWorldArchivistFields(schema, fields, true);
+        delete changes.Name;
+        if (Object.keys(changes).length === 0) {
+            return { ok: false, reason: "no_valid_fields" };
+        }
+        const current = parseWorldArchivistEntry(schema, card.entry ?? "");
+        let changed = false;
+        for (const [field, value] of Object.entries(changes)) {
+            if (value === "") {
+                if (Object.prototype.hasOwnProperty.call(current, field)) {
+                    delete current[field];
+                    changed = true;
+                }
+            } else if (current[field] !== value) {
+                current[field] = value;
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return { ok: true, reason: "unchanged", card };
+        }
+        const metadata = readWorldArchivistMetadata(card);
+        metadata.updatedTurn = Number.isInteger(turn) ? turn : history.length;
+        card.entry = renderWorldArchivistEntry(schema, current);
+        card.type = schema.toLowerCase();
+        if (triggers !== null) {
+            card.keys = cleanWorldArchivistTriggers(
+                card.title ?? title,
+                triggers
+            ).join(", ");
+        }
+        card.description = writeWorldArchivistMetadata(
+            metadata,
+            readWorldArchivistNotes(card)
+        );
+        return { ok: true, reason: "updated", card };
+    };
+    /**
+     * Clears one explicit field from an owned card.
+     * Identity Name cannot be cleared.
+     * @param {Object} request - Clear request
+     * @returns {Object} Result object
+     */
+    const clearWorldArchivistField = ({
+        schema = "", title = "", field = "", enabledTypes = [], turn = history.length
+    } = {}) => {
+        if ((field === "Name") || !worldArchivistSchema(schema).includes(field)) {
+            return { ok: false, reason: "invalid_field" };
+        }
+        return updateWorldArchivistCard({
+            schema,
+            title,
+            fields: { [field]: "" },
+            enabledTypes,
+            turn
+        });
+    };
     /**
      * Validated config settings for Inner Self
      * Default settings are specified by creators at the scenario level
