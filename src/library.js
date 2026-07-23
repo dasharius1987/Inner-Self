@@ -1664,39 +1664,72 @@ function InnerSelf(hook) {
 
         return `
 <SYSTEM>
-# WORLD ARCHIVIST TASK-CHANNEL FIX
-You must output exactly one short parenthetical world-memory operation first, followed immediately by the normal story continuation.
+# WORLD ARCHIVIST: LOCATION MEMORY
 
-The first character of the whole output must be "(".
+Your entire response must begin immediately with exactly one short parenthetical world-memory operation. After the closing parenthesis, continue the story normally.
+
+The first character of the entire response must be "(".
+
 Choose exactly one form:
 
 (world none) Story continuation...
 
-(world TYPE | TITLE | memory_key = One concise objective third-person sentence.) Story continuation...
+(world Location | EXACT_LOCATION_NAME | memory_key = One concise objective third-person sentence.) Story continuation...
 
-(world TYPE | TITLE | delete memory_key) Story continuation...
+(world Location | EXACT_LOCATION_NAME | delete memory_key) Story continuation...
 
-Rules:
-- Use only these enabled TYPE values: ${config.archiveTypes.join(", ")}.
-- TITLE must be the exact name of one world entity established by the story.
-- Reuse an existing exact memory_key when it already covers the same information.
-- Otherwise invent one short snake_case memory_key.
-- Store only durable objective world information, not narration, actions, dialogue, speculation, or temporary details.
-- Use (world none) when no useful durable fact is established.
-- The operation must contain only one memory sentence.
-- Do not add extra parentheses, explanations, labels, headings, or formatting.
+LOCATION SELECTION RULES:
+
+- Archive only a specifically named location with lasting narrative importance.
+- Create a card for a specifically named location when the story establishes a clear persistent world role.
+- A persistent world role includes being a settlement, capital, territory, stronghold, institution, major route, recurring destination, or center of a faction, culture, conflict, resource, mystery, or objective.
+- A location does not need to have appeared before. Its first substantial introduction is enough when its persistent role is clear.
+- Do not create a card merely because a place is named.
+- Do not create cards for generic scenery, incidental terrain, temporary stopping places, ordinary rooms, ordinary buildings, unnamed areas, background landmarks, or locations mentioned without any concrete persistent role.
+- Do not create a card for "the forest", "the road", "the tavern", "the village", or similar generic descriptions unless the story establishes a specific proper name and a persistent world role.
+- A durable fact alone is not enough. The location must also possess a distinct identity or persistent function in the world.
+- Use (world none) when the location is merely scenic, incidental, temporary, generic, or lacks a concrete persistent role.
+
+MEMORY SELECTION RULES:
+
+- Store only an explicitly established, persistent, and consequential fact about the location.
+- Prefer facts that define or materially change the location's identity, role, political control, regional position, inhabitants, leadership, resources, defenses, routes, affiliations, danger, strategic importance, or long-term condition.
+- Do not store decorative description, atmosphere, weather, temporary events, momentary damage, current character actions, dialogue, speculation, assumptions, obvious category facts, or details already implied by the location's name.
+- Do not create a memory merely because the task requests one.
+- Prefer updating an existing exact memory_key over creating a new key when the existing key already covers the same subject.
+- Otherwise create one short descriptive snake_case memory_key.
+- Delete a memory only when the stored fact is explicitly obsolete, false, or no longer applicable.
+
+VALIDITY TEST:
+
+Before writing a Location memory, silently verify all four conditions:
+
+1. The location has a specific established name.
+2. The story gives it a concrete persistent role or relationship.
+3. The fact is explicitly established and likely to remain true.
+4. The fact adds useful world knowledge beyond decorative description.
+
+If any condition fails, output (world none).
+
+OUTPUT RULES:
+
+- Use only the exact type Location.
+- EXACT_LOCATION_NAME must match the established name used by the story.
+- The operation may contain only one memory sentence.
+- The memory sentence must be objective, concise, information-dense, and written in third person.
+- Do not add explanations, headings, labels, formatting, or additional parenthetical operations.
 - After the closing parenthesis, continue the story normally.
 - The story continuation must occupy most of the response.
 
 Blueprint guidance only:
 ${blueprints}
 
-Existing World Archivist memories:
+Existing World Archivist Location memories:
 ${buildWorldArchivistMemoryIndex(
     config.archiveTypes
 )}
 
-Follow the format perfectly.
+Follow the format exactly.
 </SYSTEM>
 `.trim();
     };
