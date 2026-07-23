@@ -39,6 +39,10 @@ globalThis.MainSettings = (class MainSettings {
     IS_WORLD_ARCHIVIST_PLACEHOLDER_KEY_REJECTION_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
+    // Should newly discovered Archive card names be added to the tracked list automatically?
+    IS_WORLD_ARCHIVIST_AUTO_TRACK_DISCOVERED_ENABLED_BY_DEFAULT: true
+    // (true or false)
+    ,
     // Which subject categories may World Archivist Discovery consider?
     WORLD_ARCHIVIST_DISCOVERY_SCOPE: "Locations, settlements, factions, cultures, institutions, artifacts, world rules"
     // (comma-separated exhaustive discovery categories)
@@ -264,6 +268,10 @@ function InnerSelf(hook) {
     ,
     // Should obvious prompt-placeholder keys be rejected?
     IS_WORLD_ARCHIVIST_PLACEHOLDER_KEY_REJECTION_ENABLED_BY_DEFAULT: true
+    // (true or false)
+    ,
+    // Should newly discovered Archive card names be added to the tracked list automatically?
+    IS_WORLD_ARCHIVIST_AUTO_TRACK_DISCOVERED_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
     // Which subject categories may World Archivist Discovery consider?
@@ -699,6 +707,34 @@ function InnerSelf(hook) {
         return { matched: false, valid: false, kind: "missing", rest: source };
     };
 
+    const addWorldArchivistTrackedName = (config = {}, title = "") => {
+        if (
+            !config.archiveAutoTrackDiscovered
+            || !config.card
+            || typeof config.card !== "object"
+        ) return false;
+
+        const cleanTitle = cleanWorldArchivistTitle(title);
+        if (cleanTitle === "") return false;
+
+        const tracked = cleanWorldArchivistList([
+            ...(config.archiveTracked ?? []),
+            cleanTitle
+        ]);
+
+        if (tracked.length === (config.archiveTracked ?? []).length) return false;
+
+        config.archiveTracked = tracked;
+        config.card.description = [
+            "> Write exact world subject names to maintain on separate lines below.",
+            "",
+            ...tracked,
+            ""
+        ].join("\n");
+
+        return true;
+    };
+
     const applyWorldArchivistMemoryOperation = (
         operation = {},
         config = {},
@@ -721,6 +757,15 @@ function InnerSelf(hook) {
             ? deleteWorldArchivistMemory({ title: operation.title, key: operation.key, turn })
             : { ok: false, reason: "unknown_operation" };
         if (result.ok) {
+            if (
+                result.reason === "created"
+                && pending.mode === "discovery"
+            ) {
+                addWorldArchivistTrackedName(
+                    config,
+                    operation.title
+                );
+            }
             if (result.reason === "created") countWorldArchivistResult("created");
             else if (["memory_created", "memory_updated", "memory_deleted", "deleted"].includes(result.reason)) countWorldArchivistResult("updated");
         } else if (["manual_collision", "already_exists"].includes(result.reason)) countWorldArchivistResult("duplicates");
@@ -728,16 +773,17 @@ function InnerSelf(hook) {
         return result;
     };
 
-    const buildWorldArchivistMemoryIndex = () => {
+    const buildWorldArchivistTitleIndex = () => {
         const output = [];
         for (const card of storyCards) {
             const metadata = readWorldArchivistMetadata(card);
             if (metadata.schema !== WA.schema || typeof card.title !== "string") continue;
-            const memories = parseWorldArchivistMemories(card.entry ?? "");
-            output.push(`${card.title}\n` + Object.entries(memories).slice(0, 12).map(([key, value]) => `${key}: ${value}`).join("\n"));
-            if (3 <= output.length) break;
+            const title = cleanWorldArchivistTitle(card.title);
+            if (title === "") continue;
+            output.push(title);
+            if (500 <= output.length) break;
         }
-        return output.length ? output.join("\n\n") : "(none)";
+        return output.length ? output.join("\n") : "(none)";
     };
 
     const findTrackedWorldArchivistTarget = (config = {}, source = text) => {
@@ -793,34 +839,80 @@ ${memories}
 
     const buildWorldArchivistMemoryTask = (config = {}) => `
 <SYSTEM>
-# WORLD ARCHIVIST: DISCOVERY
+# STRICT OUTPUT FORMAT
+You must output exactly one short parenthetical task followed by the story continuation.
 
-Begin the response with exactly one operation, then continue the story normally.
+## SHORT TASK A: SELECT A VALID WORLD SUBJECT
 
-Choose exactly one form:
-(world none) Story continuation...
-(world SUBJECT_NAME | any_key_name = \`One short objective world fact.\`) Story continuation...
+Examine the supplied story context for specifically named world subjects.
 
-Discovery Scope is an exhaustive allowed list, not examples:
-${config.archiveScope.join(", ") || "(none)"}
+For each candidate subject:
 
-Rules:
-- Discover only a new specifically named world subject belonging to the Discovery Scope.
-- Choose a subject worth remembering for future continuity, world understanding, or the ongoing plot.
-- A first substantial introduction is enough; the subject need not recur first.
+1. Determine what the subject itself actually is.
+
+2. Assign the subject exactly one WORLD_TYPE from this exhaustive allowed list:
+   ${config.archiveScope.join(", ") || "(none)"}
+
+3. The WORLD_TYPE must directly and naturally describe the subject itself.
+
+4. Classify the named subject itself, not another entity implied or mentioned by the fact.
+
+5. Do not qualify a subject merely because it belongs to, works for, lives in, carries, creates, owns, serves, or is associated with something from an allowed WORLD_TYPE.
+
+6. Reject any subject that does not directly and unambiguously belong to one allowed WORLD_TYPE.
+
+7. From the valid subjects, choose at most one newly established subject worth remembering for persistent world continuity, world understanding, or future plot interaction.
+
+Additional selection rules:
+
+- A first substantial introduction is enough; prior recurrence is not required.
 - Ignore generic scenery, incidental names, temporary events, ordinary objects, and flavor-only mentions.
+- Do not target existing Archive titles.
+- Importance never overrides WORLD_TYPE eligibility.
+- If no valid new subject remains, choose (world none).
+
+## EXCLUDED SUBJECTS
+
+Existing Archive titles:
+${buildWorldArchivistTitleIndex()}
+
+## SHORT TASK B: OUTPUT ONE OPERATION
+
+Start your output immediately with exactly one of these forms:
+
+(world none)
+
+(world SUBJECT_NAME | ANY_KEY_NAME = \`One short objective world fact.\`)
+
+Inside the parentheses:
+
+- Copy world literally.
 - SUBJECT_NAME must be the readable story name with normal spaces, never snake_case or underscores.
-- any_key_name is a placeholder. Never copy it literally.
-- Choose one short descriptive snake_case key for one explicitly established, persistent, useful fact.
-- Do not target tracked subjects or existing Archive cards.
-- Use (world none) when no worthwhile new subject is established.
-- Continue the story after the operation; the story must occupy most of the response.
+- Then write one space, "|", and one space.
+- ANY_KEY_NAME:
+  - must contain 1-3 descriptive words.
+  - may contain letters and underscores only.
+  - use snake_case.
+  - Choose a key appropriate to the selected fact and subject type.
+  - Do not merely copy the subject type as the key.
+- Then write one space, "=", one space, and one backtick.
+- Store exactly one explicitly established, persistent, objective world fact about SUBJECT_NAME.
+- Do not store speculation, narration, dialogue, atmosphere, or temporary conditions.
+- End the fact with a period inside the backticks.
+- Close the parenthesis immediately after the final backtick.
 
-Tracked subjects forbidden to Discovery:
-${config.archiveTracked.length ? config.archiveTracked.join(", ") : "(none)"}
+Never copy SUBJECT_NAME or ANY_KEY_NAME literally from these instructions.
 
-Existing Archive cards:
-${buildWorldArchivistMemoryIndex()}
+## STORY CONTINUATION
+
+- After the closing parenthesis, write exactly one space and continue the story normally.
+- Write from ${config.player}'s second-person present-tense perspective.
+- The story must continue where it previously ended.
+- The story continuation must occupy most of the response.
+
+## EXACT SHAPE
+
+(world Example Subject | example_key = \`One short objective world fact.\`) Story continues from ${config.player}'s second-person perspective...
 </SYSTEM>`.trim();
 
     /**
@@ -970,6 +1062,7 @@ ${lines.filter(Boolean).join("\n")}
                 `Discovery enabled: ${config.archiveDiscovery}`,
                 `Maintenance enabled: ${config.archiveMaintenance}`,
                 `Reject placeholder keys: ${config.archiveRejectPlaceholderKeys}`,
+                `Automatically track discovered cards: ${config.archiveAutoTrackDiscovered}`,
                 `Scheduled feature: ${IS.WA.scheduledFeature || "(none)"}`,
                 `Discovery scope: ${config.archiveScope.join(", ") || "(none)"}`,
                 `Tracked entities: ${
@@ -1025,6 +1118,9 @@ ${lines.filter(Boolean).join("\n")}
                 ),
                 archiveRejectPlaceholderKeys: Boolean(
                     S.IS_WORLD_ARCHIVIST_PLACEHOLDER_KEY_REJECTION_ENABLED_BY_DEFAULT
+                ),
+                archiveAutoTrackDiscovered: Boolean(
+                    S.IS_WORLD_ARCHIVIST_AUTO_TRACK_DISCOVERED_ENABLED_BY_DEFAULT
                 ),
                 archiveScope: cleanWorldArchivistList(
                     S.WORLD_ARCHIVIST_DISCOVERY_SCOPE
@@ -1120,13 +1216,13 @@ ${lines.filter(Boolean).join("\n")}
                         `> Enable Discovery: ${fallback.archiveDiscovery}`,
                         `> Enable Maintenance: ${fallback.archiveMaintenance}`,
                         `> Reject placeholder keys: ${fallback.archiveRejectPlaceholderKeys}`,
+                        `> Automatically track discovered cards: ${fallback.archiveAutoTrackDiscovered}`,
                         `> Discovery scope: ${fallback.archiveScope.join(", ")}`
                     ].join("\n"),
                     "class",
                     "Configure \nWorld Archivist",
                     [
                         "> Write exact world subject names to maintain on separate lines below.",
-                        "> Tracked subjects are excluded from Discovery.",
                         "",
                         ""
                     ].join("\n"),
@@ -1184,6 +1280,12 @@ ${lines.filter(Boolean).join("\n")}
                     fallback.archiveRejectPlaceholderKeys
                 );
 
+            const archiveAutoTrackDiscovered =
+                parseBoolean(
+                    extract.automaticallytrackdiscoveredcards,
+                    fallback.archiveAutoTrackDiscovered
+                );
+
             const archiveScope =
                 cleanWorldArchivistList(
                     extract.discoveryscope
@@ -1219,12 +1321,12 @@ ${lines.filter(Boolean).join("\n")}
                 `> Enable Discovery: ${archiveDiscovery}`,
                 `> Enable Maintenance: ${archiveMaintenance}`,
                 `> Reject placeholder keys: ${archiveRejectPlaceholderKeys}`,
+                `> Automatically track discovered cards: ${archiveAutoTrackDiscovered}`,
                 `> Discovery scope: ${archiveScope.join(", ")}`
             ].join("\n");
 
             card.description = [
                 "> Write exact world subject names to maintain on separate lines below.",
-                "> Tracked subjects are excluded from Discovery.",
                 "",
                 ...archiveTracked,
                 ""
@@ -1235,6 +1337,7 @@ ${lines.filter(Boolean).join("\n")}
                 archiveDiscovery,
                 archiveMaintenance,
                 archiveRejectPlaceholderKeys,
+                archiveAutoTrackDiscovered,
                 archiveScope,
                 archiveTracked
             };
@@ -1263,6 +1366,7 @@ ${lines.filter(Boolean).join("\n")}
      * @property {boolean} archiveDiscovery - Is World Archivist Discovery enabled?
      * @property {boolean} archiveMaintenance - Is tracked Archive maintenance enabled?
      * @property {boolean} archiveRejectPlaceholderKeys - Are literal prompt-placeholder keys rejected?
+     * @property {boolean} archiveAutoTrackDiscovered - Are newly discovered Archive card names automatically added to the tracked list?
      * @property {string[]} archiveScope - Exhaustive subject categories allowed for Discovery
      * @property {string[]} archiveTracked - Player-selected world entity names
      * @property {string[]} agents - All agent names, ordered from highest to lowest trigger priority
