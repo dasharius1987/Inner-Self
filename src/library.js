@@ -51,8 +51,8 @@ globalThis.MainSettings = (class MainSettings {
     ARCHIVIST_DISCOVERY_STRICTNESS: "Medium"
     // ("Loose" or "Medium")
     ,
-    // How many key-value entries may one Archivist Discovery operation store at most?
-    ARCHIVIST_MAXIMUM_ENTRIES_PER_DISCOVERY: 1
+    // How many coherent facts may one Archivist Discovery operation store at most?
+    ARCHIVIST_MAXIMUM_FACTS_PER_DISCOVERY: 1
     // (1, 2, or 3)
     ,
     // Is the player character's first name known in advance? Ignore this setting if unsure
@@ -290,8 +290,8 @@ function InnerSelf(hook) {
     ARCHIVIST_DISCOVERY_STRICTNESS: "Medium"
     // ("Loose" or "Medium")
     ,
-    // How many key-value entries may one Archivist Discovery operation store at most?
-    ARCHIVIST_MAXIMUM_ENTRIES_PER_DISCOVERY: 1
+    // How many coherent facts may one Archivist Discovery operation store at most?
+    ARCHIVIST_MAXIMUM_FACTS_PER_DISCOVERY: 1
     // (1, 2, or 3)
     ,
     // Is the player character's first name known in advance? Ignore this setting if unsure
@@ -499,7 +499,7 @@ function InnerSelf(hook) {
     const ARCHIVIST_MEMORY_KEY_LIMIT = 80;
     const ARCHIVIST_MEMORY_VALUE_LIMIT = 500;
     const ARCHIVIST_MEMORY_LIMIT_PER_CARD = 30;
-    const ARCHIVIST_DISCOVERY_ENTRY_LIMITS = Object.freeze([1, 2, 3]);
+    const ARCHIVIST_DISCOVERY_FACT_LIMITS = Object.freeze([1, 2, 3]);
     const ARCHIVIST_RESERVED_MEMORY_KEYS = new Set([
         "any_key_name", "memory_key", "key", "new_key", "example_key",
         "snake_case_key", "descriptive_fact_key", "unwanted_key"
@@ -573,7 +573,7 @@ function InnerSelf(hook) {
         ) ? "" : clean;
     };
 
-    const cleanArchivistMaximumDiscoveryEntries = (
+    const cleanArchivistMaximumDiscoveryFacts = (
         value = 1,
         fallback = 1
     ) => {
@@ -581,14 +581,14 @@ function InnerSelf(hook) {
         const parsedFallback = Number(fallback);
 
         if (
-            ARCHIVIST_DISCOVERY_ENTRY_LIMITS.includes(
+            ARCHIVIST_DISCOVERY_FACT_LIMITS.includes(
                 parsed
             )
         ) {
             return parsed;
         }
 
-        return ARCHIVIST_DISCOVERY_ENTRY_LIMITS.includes(
+        return ARCHIVIST_DISCOVERY_FACT_LIMITS.includes(
             parsedFallback
         )
             ? parsedFallback
@@ -733,139 +733,27 @@ function InnerSelf(hook) {
         worldType = "",
         key = "",
         value = "",
-        entries = [],
-        maximumEntries = 1,
         turn = history.length
     } = {}) => {
         title = cleanArchivistTitle(title);
         worldType = cleanArchivistWorldType(worldType);
-        maximumEntries =
-            cleanArchivistMaximumDiscoveryEntries(
-                maximumEntries
-            );
-
-        const sourceEntries = (
-            Array.isArray(entries)
-            && entries.length
-        )
-            ? entries
-            : [{ key, value }];
-
-        if (maximumEntries < sourceEntries.length) {
-            return {
-                ok: false,
-                reason: "too_many_entries"
-            };
-        }
-
-        const normalizedEntries = [];
-        const seenKeys = new Set();
-
-        for (const entry of sourceEntries) {
-            const normalizedKey =
-                cleanArchivistMemoryKey(
-                    entry?.key
-                    ?? ""
-                );
-            const normalizedValue =
-                cleanArchivistValue(
-                    entry?.value
-                    ?? "",
-                    ARCHIVIST_MEMORY_VALUE_LIMIT
-                );
-
-            if (
-                normalizedKey === ""
-                || normalizedValue === ""
-                || seenKeys.has(normalizedKey)
-            ) {
-                return {
-                    ok: false,
-                    reason: "invalid_memory"
-                };
-            }
-
-            seenKeys.add(normalizedKey);
-            normalizedEntries.push({
-                key: normalizedKey,
-                value: normalizedValue
-            });
-        }
-
-        if (
-            archivistId(title) === ""
-            || normalizedEntries.length === 0
-        ) {
-            return {
-                ok: false,
-                reason: "invalid_memory"
-            };
-        }
-
+        key = cleanArchivistMemoryKey(key);
+        value = cleanArchivistValue(value, ARCHIVIST_MEMORY_VALUE_LIMIT);
+        if (archivistId(title) === "" || key === "" || value === "") return { ok: false, reason: "invalid_memory" };
         const card = findArchivistCard(title);
-
-        if (!card) {
-            const memories = Object.fromEntries(
-                normalizedEntries.map(
-                    entry => [
-                        entry.key,
-                        entry.value
-                    ]
-                )
-            );
-
-            return createArchivistCard({
-                title,
-                worldType,
-                entry:
-                    renderArchivistMemories(
-                        memories
-                    ),
-                triggers: [title],
-                turn
-            });
-        }
-
+        if (!card) return createArchivistCard({
+            title,
+            worldType,
+            entry: `${key}: ${value}`,
+            triggers: [title],
+            turn
+        });
         const memories = parseArchivistMemories(card.entry ?? "");
-        let changed = false;
-        let replacedExisting = false;
-
-        for (const entry of normalizedEntries) {
-            if (memories[entry.key] === entry.value) {
-                continue;
-            }
-
-            if (
-                Object.prototype.hasOwnProperty.call(
-                    memories,
-                    entry.key
-                )
-            ) {
-                replacedExisting = true;
-            }
-
-            memories[entry.key] = entry.value;
-            changed = true;
-        }
-
-        if (!changed) {
-            return {
-                ok: true,
-                reason: "unchanged",
-                card
-            };
-        }
-
+        if (memories[key] === value) return { ok: true, reason: "unchanged", card };
+        const existed = Object.prototype.hasOwnProperty.call(memories, key);
+        memories[key] = value;
         const result = rewriteArchivistCard({ title, entry: renderArchivistMemories(memories), turn });
-        if (
-            result.ok
-            && result.reason === "rewritten"
-        ) {
-            result.reason = replacedExisting
-                ? "memory_updated"
-                : "memory_created";
-        }
-
+        if (result.ok && result.reason === "rewritten") result.reason = existed ? "memory_updated" : "memory_created";
         return result;
     };
 
@@ -921,14 +809,9 @@ function InnerSelf(hook) {
 
     const parseArchivistMemoryOperation = (
         source = "",
-        mode = "",
-        maximumEntries = 1
+        mode = ""
     ) => {
         if (typeof source !== "string") return { matched: false, valid: false, rest: "" };
-        maximumEntries =
-            cleanArchivistMaximumDiscoveryEntries(
-                maximumEntries
-            );
         const pairs = { "(": ")", "[": "]", "{": "}" }, openerPattern = /[\(\[\{]/g;
         let match;
         while ((match = openerPattern.exec(source))) {
@@ -955,7 +838,7 @@ function InnerSelf(hook) {
                         inner
                     );
 
-                if (3 <= fields.length) {
+                if (fields.length === 3) {
                     const worldType =
                         cleanArchivistWorldType(
                             fields[0]
@@ -964,88 +847,36 @@ function InnerSelf(hook) {
                         cleanArchivistTitle(
                             fields[1]
                         );
-                    const entries = [];
-                    const seenKeys = new Set();
-                    let invalidKind = "";
-
-                    if (
-                        maximumEntries
-                        < fields.length - 2
-                    ) {
-                        invalidKind =
-                            "too_many_entries";
-                    }
-
-                    for (
-                        const field
-                        of fields.slice(2)
-                    ) {
-                        const assignment =
-                            field.match(
-                                /^([^=\n]+?)\s*=\s*([\s\S]+)$/
-                            );
-
-                        if (!assignment) {
-                            invalidKind ||=
-                                "malformed_memory";
-                            continue;
-                        }
-
-                        const key =
-                            cleanArchivistMemoryKey(
-                                assignment[1]
-                            );
-                        const value =
-                            cleanArchivistValue(
-                                assignment[2],
-                                ARCHIVIST_MEMORY_VALUE_LIMIT
-                            );
-
-                        if (
-                            key === ""
-                            || value === ""
-                        ) {
-                            invalidKind ||=
-                                "malformed_memory";
-                            continue;
-                        }
-
-                        if (seenKeys.has(key)) {
-                            invalidKind ||=
-                                "duplicate_entry_key";
-                            continue;
-                        }
-
-                        seenKeys.add(key);
-                        entries.push({
-                            key,
-                            value
-                        });
-                    }
-
-                    const firstEntry =
-                        entries[0]
-                        ?? {};
+                    const assignment =
+                        fields[2].match(
+                            /^([^=\n]+?)\s*=\s*([\s\S]+)$/
+                        );
+                    const key =
+                        cleanArchivistMemoryKey(
+                            assignment?.[1]
+                            ?? ""
+                        );
+                    const value =
+                        cleanArchivistValue(
+                            assignment?.[2]
+                            ?? "",
+                            ARCHIVIST_MEMORY_VALUE_LIMIT
+                        );
 
                     return {
                         matched: true,
                         valid:
-                            invalidKind === ""
-                            && worldType !== ""
+                            worldType !== ""
                             && title !== ""
-                            && entries.length !== 0,
-                        kind:
-                            invalidKind
-                            || "assign_memory",
+                            && key !== ""
+                            && value !== "",
+                        kind: assignment
+                            ? "assign_memory"
+                            : "malformed_memory",
                         worldType,
                         title,
-                        key:
-                            firstEntry.key
-                            ?? "",
-                        value:
-                            firstEntry.value
-                            ?? "",
-                        entries,
+                        key,
+                        value,
                         raw,
                         start,
                         end,
@@ -1118,11 +949,6 @@ function InnerSelf(hook) {
                 worldType: operation.worldType,
                 key: operation.key,
                 value: operation.value,
-                entries: operation.entries,
-                maximumEntries:
-                    pending.mode === "discovery"
-                    ? config.archiveMaximumDiscoveryEntries
-                    : 1,
                 turn
             })
             : operation.kind === "delete_memory"
@@ -1283,6 +1109,27 @@ ${memories}
         );
     };
 
+    const buildArchivistDiscoveryFactRule = (
+        maximumFacts = 1,
+        subject = "SUBJECT",
+        description = "directly established, persistent"
+    ) => {
+        maximumFacts =
+            cleanArchivistMaximumDiscoveryFacts(
+                maximumFacts
+            );
+        const amount = maximumFacts === 1
+            ? "one"
+            : maximumFacts === 2
+            ? "one or two"
+            : "at least one but up to three";
+        const noun = maximumFacts === 1
+            ? "fact"
+            : "facts";
+
+        return `- fact must state ${amount} coherent, ${description} ${noun} about ${subject}.`;
+    };
+
     const buildMediumArchivistMemoryTask = (config = {}) => `
 <SYSTEM>
 # ARCHIVIST: DISCOVERY
@@ -1337,14 +1184,11 @@ Inside the operation:
 
 - TYPE is determined by SUBJECT. Use the single best-fitting, most specific allowed TYPE and copy its spelling exactly.
 - SUBJECT must use readable words and spaces, never snake_case or underscores.
-- Include at least one and no more than ${config.archiveMaximumDiscoveryEntries} key-value ${config.archiveMaximumDiscoveryEntries === 1 ? "entry" : "entries"}.
-${config.archiveMaximumDiscoveryEntries === 1 ? "- Do not include a second key-value entry." : "- To include another entry, append exactly before the closing parenthesis: | key = `fact.`"}
-- Separate every operation field with one space, "|", and one space.
-- Each key must contain 1–3 descriptive lowercase snake_case words.
-- Each key must describe the stored attribute or relationship rather than merely classify SUBJECT. TYPE-related words are allowed when they meaningfully describe the value.
-- Each value must state an objective, directly established, persistent fact or a coherent group of closely related facts about SUBJECT.
-- Do not combine unrelated facts merely to bypass the configured maximum.
-- End every value with a period inside the backticks.
+- key must contain 1–3 descriptive lowercase snake_case words.
+- key must describe the stored attribute or relationship rather than merely classify SUBJECT. TYPE-related words are allowed when they meaningfully describe the fact.
+${buildArchivistDiscoveryFactRule(config.archiveMaximumDiscoveryFacts)}
+- Do not combine unrelated facts.
+- End fact with a period inside the backticks.
 - TYPE, SUBJECT, key, and fact are placeholders and must not be copied literally.
 
 After the closing parenthesis, write exactly one space and continue the story normally from ${config.player}'s second-person present-tense perspective.
@@ -1404,9 +1248,6 @@ Inside the parentheses:
 - Then write one space, "|", and one space.
 - SUBJECT_NAME must be the readable story name with normal spaces, never snake_case or underscores.
 - Then write one space, "|", and one space.
-- Include at least one and no more than ${config.archiveMaximumDiscoveryEntries} key-value ${config.archiveMaximumDiscoveryEntries === 1 ? "entry" : "entries"}.
-${config.archiveMaximumDiscoveryEntries === 1 ? "- Do not include a second key-value entry." : "- To include another entry, append exactly before the closing parenthesis: | any_key_name = `One short objective world fact.`"}
-- Separate multiple entries with one space, "|", and one space.
 - ANY_KEY_NAME:
   - must contain 1-3 descriptive words.
   - may contain letters and underscores only.
@@ -1414,10 +1255,10 @@ ${config.archiveMaximumDiscoveryEntries === 1 ? "- Do not include a second key-v
   - Choose a key appropriate to the selected fact and subject type.
   - Do not merely copy the subject type as the key.
 - Then write one space, "=", one space, and one backtick.
-- Each value may store one established or strongly implied, persistent, objective world fact or a coherent group of closely related facts about SUBJECT_NAME.
-- Do not combine unrelated facts merely to bypass the configured maximum.
+${buildArchivistDiscoveryFactRule(config.archiveMaximumDiscoveryFacts, "SUBJECT_NAME", "established or strongly implied, persistent, objective world")}
+- Do not combine unrelated facts.
 - Do not store unsupported speculation, narration, dialogue, atmosphere, or temporary conditions.
-- End every value with a period inside the backticks.
+- End fact with a period inside the backticks.
 - Close the parenthesis immediately after the final backtick.
 
 Never copy SUBJECT_NAME or ANY_KEY_NAME literally from these instructions.
@@ -1586,20 +1427,6 @@ ${lines.join("\n")}
             : latest.mode === "discovery"
             ? "Discovery"
             : "(unknown)";
-        const entries = (
-            Array.isArray(latest.entries)
-            && latest.entries.length
-        )
-            ? latest.entries
-            : (
-                latest.key
-                || latest.value
-            )
-            ? [{
-                key: latest.key ?? "",
-                value: latest.value ?? ""
-            }]
-            : [];
 
         return [
             "",
@@ -1621,13 +1448,8 @@ ${lines.join("\n")}
             `Operation: ${latest.kind || "(unknown)"}`,
             `World type: ${worldType || "(none)"}`,
             `Subject: ${latest.title || "(none)"}`,
-            `Entries: ${entries.length || "(none)"}`,
-            ...entries.flatMap(
-                (entry, index) => [
-                    `Entry ${index + 1} key: ${entry.key || "(none)"}`,
-                    `Entry ${index + 1} value: ${entry.value || "(none)"}`
-                ]
-            ),
+            `Key: ${latest.key || "(none)"}`,
+            `Value: ${latest.value || "(none)"}`,
             `Result: ${latest.result || "(unknown)"}`,
             `Raw operation: ${latest.raw || "(none)"}`
         ];
@@ -1670,7 +1492,7 @@ ${lines.join("\n")}
                 `Discovery enabled: ${config.archiveDiscovery}`,
                 `Maintenance enabled: ${config.archiveMaintenance}`,
                 `Discovery strictness: ${config.archiveDiscoveryStrictness}`,
-                `Maximum entries per discovery: ${config.archiveMaximumDiscoveryEntries}`,
+                `Maximum facts per discovery: ${config.archiveMaximumDiscoveryFacts}`,
                 `Reject placeholder keys: ${config.archiveRejectPlaceholderKeys}`,
                 `Automatically track discovered cards: ${config.archiveAutoTrackDiscovered}`,
                 `Scheduled feature: ${IS.ARCHIVIST.scheduledFeature || "(none)"}`,
@@ -1730,9 +1552,10 @@ ${lines.join("\n")}
                     cleanArchivistDiscoveryStrictness(
                         S.ARCHIVIST_DISCOVERY_STRICTNESS
                     ),
-                archiveMaximumDiscoveryEntries:
-                    cleanArchivistMaximumDiscoveryEntries(
-                        S.ARCHIVIST_MAXIMUM_ENTRIES_PER_DISCOVERY
+                archiveMaximumDiscoveryFacts:
+                    cleanArchivistMaximumDiscoveryFacts(
+                        S.ARCHIVIST_MAXIMUM_FACTS_PER_DISCOVERY
+                        ?? S.ARCHIVIST_MAXIMUM_ENTRIES_PER_DISCOVERY
                     ),
                 archiveMaintenance: Boolean(
                     S.IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT
@@ -1834,11 +1657,11 @@ ${lines.join("\n")}
                     [
                         "> Archivist Discovery creates valuable new Archive cards.",
                         "> Archivist Maintenance updates player-selected tracked Archive cards.",
-                        "> Set Maximum entries per discovery to 1, 2, or 3.",
+                        "> Set Maximum facts per discovery to 1, 2, or 3.",
                         `> Enable Discovery: ${fallback.archiveDiscovery}`,
                         `> Enable Maintenance: ${fallback.archiveMaintenance}`,
                         `> Discovery strictness: ${fallback.archiveDiscoveryStrictness}`,
-                        `> Maximum entries per discovery: ${fallback.archiveMaximumDiscoveryEntries}`,
+                        `> Maximum facts per discovery: ${fallback.archiveMaximumDiscoveryFacts}`,
                         `> Reject placeholder keys: ${fallback.archiveRejectPlaceholderKeys}`,
                         `> Automatically track discovered cards: ${fallback.archiveAutoTrackDiscovered}`,
                         `> Discovery scope: ${fallback.archiveScope.join(", ")}`
@@ -1904,11 +1727,12 @@ ${lines.join("\n")}
                     ?? fallback.archiveDiscoveryStrictness
                 );
 
-            const archiveMaximumDiscoveryEntries =
-                cleanArchivistMaximumDiscoveryEntries(
-                    extract.maximumentriesperdiscovery
-                    ?? fallback.archiveMaximumDiscoveryEntries,
-                    fallback.archiveMaximumDiscoveryEntries
+            const archiveMaximumDiscoveryFacts =
+                cleanArchivistMaximumDiscoveryFacts(
+                    extract.maximumfactsperdiscovery
+                    ?? extract.maximumentriesperdiscovery
+                    ?? fallback.archiveMaximumDiscoveryFacts,
+                    fallback.archiveMaximumDiscoveryFacts
                 );
 
             const archiveRejectPlaceholderKeys =
@@ -1955,11 +1779,11 @@ ${lines.join("\n")}
             card.entry = [
                 "> Archivist Discovery creates valuable new Archive cards.",
                 "> Archivist Maintenance updates player-selected tracked Archive cards.",
-                "> Set Maximum entries per discovery to 1, 2, or 3.",
+                "> Set Maximum facts per discovery to 1, 2, or 3.",
                 `> Enable Discovery: ${archiveDiscovery}`,
                 `> Enable Maintenance: ${archiveMaintenance}`,
                 `> Discovery strictness: ${archiveDiscoveryStrictness}`,
-                `> Maximum entries per discovery: ${archiveMaximumDiscoveryEntries}`,
+                `> Maximum facts per discovery: ${archiveMaximumDiscoveryFacts}`,
                 `> Reject placeholder keys: ${archiveRejectPlaceholderKeys}`,
                 `> Automatically track discovered cards: ${archiveAutoTrackDiscovered}`,
                 `> Discovery scope: ${archiveScope.join(", ")}`
@@ -1977,7 +1801,7 @@ ${lines.join("\n")}
                 archiveDiscovery,
                 archiveMaintenance,
                 archiveDiscoveryStrictness,
-                archiveMaximumDiscoveryEntries,
+                archiveMaximumDiscoveryFacts,
                 archiveRejectPlaceholderKeys,
                 archiveAutoTrackDiscovered,
                 archiveScope,
@@ -2008,7 +1832,7 @@ ${lines.join("\n")}
      * @property {boolean} archiveDiscovery - Is Archivist Discovery enabled?
      * @property {boolean} archiveMaintenance - Is tracked Archive maintenance enabled?
      * @property {"Loose"|"Medium"} archiveDiscoveryStrictness - How readily Discovery creates Archive cards
-     * @property {1|2|3} archiveMaximumDiscoveryEntries - Maximum key-value entries stored by one Discovery operation
+     * @property {1|2|3} archiveMaximumDiscoveryFacts - Maximum coherent facts stored by one Discovery operation
      * @property {boolean} archiveRejectPlaceholderKeys - Are literal prompt-placeholder keys rejected?
      * @property {boolean} archiveAutoTrackDiscovered - Are newly discovered Archive card names automatically added to the tracked list?
      * @property {string[]} archiveScope - Exhaustive subject categories allowed for Discovery
@@ -3756,8 +3580,7 @@ Follow the format **perfectly**.
     let archivistMemoryOperation = IS.ARCHIVIST.pending
         ? parseArchivistMemoryOperation(
             text,
-            IS.ARCHIVIST.pending.mode,
-            config.archiveMaximumDiscoveryEntries
+            IS.ARCHIVIST.pending.mode
         )
         : {
             matched: false,
@@ -3844,26 +3667,6 @@ Follow the format **perfectly**.
                 value:
                     archivistMemoryOperation.value
                     ?? "",
-                entries:
-                    Array.isArray(
-                        archivistMemoryOperation.entries
-                    )
-                    ? archivistMemoryOperation.entries.map(
-                        entry => ({
-                            key:
-                                cleanArchivistMemoryKey(
-                                    entry?.key
-                                    ?? ""
-                                ),
-                            value:
-                                cleanArchivistValue(
-                                    entry?.value
-                                    ?? "",
-                                    ARCHIVIST_MEMORY_VALUE_LIMIT
-                                )
-                        })
-                    )
-                    : [],
                 raw:
                     cleanArchivistValue(
                         archivistMemoryOperation.raw
