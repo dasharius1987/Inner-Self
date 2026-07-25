@@ -739,9 +739,12 @@ function InnerSelf(hook) {
         return result;
     };
 
-    const parseArchivistMemoryOperation = (source = "") => {
+    const parseArchivistMemoryOperation = (
+        source = "",
+        mode = ""
+    ) => {
         if (typeof source !== "string") return { matched: false, valid: false, rest: "" };
-        const pairs = { "(": ")", "[": "]", "{": "}" }, openerPattern = /[\(\[\{]\s*world\b/ig;
+        const pairs = { "(": ")", "[": "]", "{": "}" }, openerPattern = /[\(\[\{]/g;
         let match;
         while ((match = openerPattern.exec(source))) {
             const start = match.index, opener = source[start], closer = pairs[opener];
@@ -749,41 +752,52 @@ function InnerSelf(hook) {
             if (end === -1) { const lineEnd = source.indexOf("\n", openerPattern.lastIndex); end = lineEnd === -1 ? source.length : lineEnd; } else end += 1;
             const raw = source.slice(start, end);
             const inner = raw.slice(1, raw.endsWith(closer) ? -1 : undefined).trim();
+            if (!/^none\b/i.test(inner) && !inner.includes("|")) continue;
             const rest = (source.slice(0, start) + source.slice(end)).replace(/\n{3,}/g, "\n\n").trim();
-            if (/^world[\s_-]+none\s*$/i.test(inner)) return { matched: true, valid: true, kind: "none", raw, start, end, rest };
-            const deletion = inner.match(/^world\s+([^|:\n]+)\s*\|\s*delete\s+([a-zA-Z0-9 _-]+)\s*$/i);
-            if (deletion) {
-                const title = cleanArchivistTitle(deletion[1]), key = cleanArchivistMemoryKey(deletion[2]);
-                return { matched: true, valid: title !== "" && key !== "", kind: "delete_memory", title, key, raw, start, end, rest };
+            if (/^none\s*$/i.test(inner)) return { matched: true, valid: true, kind: "none", raw, start, end, rest };
+
+            if (mode !== "discovery") {
+                const deletion = inner.match(/^([^|:\n]+)\s*\|\s*delete\s+([a-zA-Z0-9 _-]+)\s*$/i);
+                if (deletion) {
+                    const title = cleanArchivistTitle(deletion[1]), key = cleanArchivistMemoryKey(deletion[2]);
+                    return { matched: true, valid: title !== "" && key !== "", kind: "delete_memory", title, key, raw, start, end, rest };
+                }
             }
-            const typedAssignment = inner.match(
-                /^world\s+([^|:\n]+)\s*\|\s*([^|:\n]+)\s*\|\s*([^=\n]+?)\s*=\s*([\s\S]+)$/i
-            );
-            if (typedAssignment) {
-                const worldType = cleanArchivistWorldType(typedAssignment[1]);
-                const title = cleanArchivistTitle(typedAssignment[2]);
-                const key = cleanArchivistMemoryKey(typedAssignment[3]);
-                const value = cleanArchivistValue(typedAssignment[4], ARCHIVIST_MEMORY_VALUE_LIMIT);
-                return {
-                    matched: true,
-                    valid: worldType !== "" && title !== "" && key !== "" && value !== "",
-                    kind: "assign_memory",
-                    worldType,
-                    title,
-                    key,
-                    value,
-                    raw,
-                    start,
-                    end,
-                    rest
-                };
+
+            if (mode !== "tracked") {
+                const typedAssignment = inner.match(
+                    /^([^|:\n]+)\s*\|\s*([^|:\n]+)\s*\|\s*([^|=\n]+?)\s*=\s*([\s\S]+)$/i
+                );
+                if (typedAssignment) {
+                    const worldType = cleanArchivistWorldType(typedAssignment[1]);
+                    const title = cleanArchivistTitle(typedAssignment[2]);
+                    const key = cleanArchivistMemoryKey(typedAssignment[3]);
+                    const value = cleanArchivistValue(typedAssignment[4], ARCHIVIST_MEMORY_VALUE_LIMIT);
+                    return {
+                        matched: true,
+                        valid: worldType !== "" && title !== "" && key !== "" && value !== "",
+                        kind: "assign_memory",
+                        worldType,
+                        title,
+                        key,
+                        value,
+                        raw,
+                        start,
+                        end,
+                        rest
+                    };
+                }
             }
-            const assignment = inner.match(/^world\s+([^|:\n]+)\s*\|\s*([^=\n]+?)\s*=\s*([\s\S]+)$/i);
-            if (assignment) {
-                const title = cleanArchivistTitle(assignment[1]), key = cleanArchivistMemoryKey(assignment[2]);
-                const value = cleanArchivistValue(assignment[3], ARCHIVIST_MEMORY_VALUE_LIMIT);
-                return { matched: true, valid: title !== "" && key !== "" && value !== "", kind: "assign_memory", title, key, value, raw, start, end, rest };
+
+            if (mode !== "discovery") {
+                const assignment = inner.match(/^([^|:\n]+)\s*\|\s*([^|=\n]+?)\s*=\s*([\s\S]+)$/i);
+                if (assignment) {
+                    const title = cleanArchivistTitle(assignment[1]), key = cleanArchivistMemoryKey(assignment[2]);
+                    const value = cleanArchivistValue(assignment[3], ARCHIVIST_MEMORY_VALUE_LIMIT);
+                    return { matched: true, valid: title !== "" && key !== "" && value !== "", kind: "assign_memory", title, key, value, raw, start, end, rest };
+                }
             }
+
             return { matched: true, valid: false, kind: "malformed_memory", raw, start, end, rest };
         }
         return { matched: false, valid: false, kind: "missing", rest: source };
@@ -896,16 +910,16 @@ Begin the response with exactly one operation, then continue the story normally.
 Maintain only this player-selected subject: ${target.title}
 
 Choose exactly one form:
-(world none) Story continuation...
-(world ${target.title} | any_key_name = \`One short objective world fact.\`) Story continuation...
-(world ${target.title} | delete unwanted_key) Story continuation...
+(none)
+(${target.title} | any_key_name = \`One short objective world fact.\`)
+(${target.title} | delete unwanted_key)
 
 Rules:
 - any_key_name and unwanted_key are placeholders. Never copy either literally.
 - Choose a short descriptive snake_case key, or reuse an existing exact key to replace its value.
 - Store only explicitly established, persistent, useful facts about ${target.title}.
 - Ignore narration, dialogue, speculation, atmosphere, and temporary details.
-- Use (world none) when nothing meaningful changed.
+- Use (none) when nothing meaningful changed.
 - Update no other subject.
 - Continue the story after the operation; the story must occupy most of the response.
 
@@ -916,6 +930,32 @@ ${memories}
 
     const validateArchivistRoute = (operation = {}, pending = {}, config = {}) => {
         if (!operation.valid || operation.kind === "none") return operation;
+        if (
+            pending.mode === "discovery"
+            && operation.kind === "assign_memory"
+        ) {
+            const allowedWorldTypes = new Set(
+                (config.archiveScope ?? []).map(
+                    worldType => cleanArchivistWorldType(
+                        worldType
+                    ).toLowerCase()
+                )
+            );
+            if (
+                !allowedWorldTypes.has(
+                    cleanArchivistWorldType(
+                        operation.worldType
+                        ?? ""
+                    ).toLowerCase()
+                )
+            ) {
+                return {
+                    ...operation,
+                    valid: false,
+                    kind: "invalid_world_type"
+                };
+            }
+        }
         const target = pending.target;
         if (target) return archivistId(operation.title) === archivistId(target.title)
             ? operation : { ...operation, valid: false, kind: "wrong_tracked_target" };
@@ -923,6 +963,34 @@ ${memories}
         return trackedIds.has(archivistId(operation.title))
             ? { ...operation, valid: false, kind: "tracked_discovery_blocked" }
             : operation;
+    };
+
+    const resolveArchivistOperationWorldType = (
+        operation = {},
+        pending = {}
+    ) => {
+        const direct = cleanArchivistWorldType(
+            operation.worldType
+            ?? ""
+        );
+        if (direct !== "") return direct;
+
+        const tracked = cleanArchivistWorldType(
+            pending.target?.worldType
+            ?? ""
+        );
+        if (tracked !== "") return tracked;
+
+        const card = findArchivistCard(
+            operation.title
+            || pending.target?.title
+            || ""
+        );
+
+        return cleanArchivistWorldType(
+            readArchivistMetadata(card ?? {}).worldType
+            ?? ""
+        );
     };
 
     const buildMediumArchivistMemoryTask = (config = {}) => `
@@ -957,7 +1025,7 @@ Additional selection rules:
 - Ignore generic scenery, incidental names, temporary events, ordinary objects, and flavor-only mentions.
 - Do not target existing Archive titles.
 - Importance never overrides WORLD_TYPE eligibility.
-- If no valid new subject remains, choose (world none).
+- If no valid new subject remains, choose (none).
 
 ## EXCLUDED SUBJECTS
 
@@ -968,14 +1036,12 @@ ${buildArchivistTitleIndex()}
 
 Start your output immediately with exactly one of these forms:
 
-(world none)
+(none)
 
-(world WORLD_TYPE | SUBJECT_NAME | ANY_KEY_NAME = \`One short objective world fact.\`)
+(WORLD_TYPE | SUBJECT_NAME | ANY_KEY_NAME = \`One short objective world fact.\`)
 
 Inside the parentheses:
 
-- Copy world literally.
-- Then write one space and the exact WORLD_TYPE selected in Short Task A.
 - Copy the chosen WORLD_TYPE exactly as you selected it.
 - Then write one space, "|", and one space.
 - SUBJECT_NAME must be the readable story name with normal spaces, never snake_case or underscores.
@@ -1003,7 +1069,7 @@ Never copy SUBJECT_NAME or ANY_KEY_NAME literally from these instructions.
 
 ## EXACT SHAPE
 
-(world Locations | Example Subject | example_key = \`One short objective world fact.\`) Story continues from ${config.player}'s second-person perspective...
+(Locations | Example Subject | example_key = \`One short objective world fact.\`) Story continues from ${config.player}'s second-person perspective...
 </SYSTEM>`.trim();
 
     const buildLooseArchivistMemoryTask = (config = {}) => `
@@ -1032,12 +1098,12 @@ For each candidate subject:
 
 Additional selection rules:
 
-- Prefer a useful operation over (world none) whenever the context supports a persistent subject and fact.
+- Prefer a useful operation over (none) whenever the context supports a persistent subject and fact.
 - Accept strongly implied persistent facts when the context makes them clear; do not require literal exposition.
 - Include notable objects, groups, places, settings, institutions, cultures, artifacts, rules, and recurring concepts when they fit the configured scope closely enough.
 - Ignore only clearly generic scenery, incidental names, temporary events, and flavor-only mentions.
 - Do not target existing Archive titles.
-- If no useful new subject can be identified without inventing unsupported information, choose (world none).
+- If no useful new subject can be identified without inventing unsupported information, choose (none).
 
 ## EXCLUDED SUBJECTS
 
@@ -1048,14 +1114,12 @@ ${buildArchivistTitleIndex()}
 
 Start your output immediately with exactly one of these forms:
 
-(world none)
+(none)
 
-(world WORLD_TYPE | SUBJECT_NAME | ANY_KEY_NAME = \`One short objective world fact.\`)
+(WORLD_TYPE | SUBJECT_NAME | ANY_KEY_NAME = \`One short objective world fact.\`)
 
 Inside the parentheses:
 
-- Copy world literally.
-- Then write one space and the exact WORLD_TYPE selected in Short Task A.
 - Copy the chosen WORLD_TYPE exactly as you selected it.
 - Then write one space, "|", and one space.
 - SUBJECT_NAME must be the readable story name with normal spaces, never snake_case or underscores.
@@ -1083,7 +1147,7 @@ Never copy SUBJECT_NAME or ANY_KEY_NAME literally from these instructions.
 
 ## EXACT SHAPE
 
-(world Locations | Example Subject | example_key = \`One short objective world fact.\`) Story continues from ${config.player}'s second-person perspective...
+(Locations | Example Subject | example_key = \`One short objective world fact.\`) Story continues from ${config.player}'s second-person perspective...
 </SYSTEM>`.trim();
 
     const buildArchivistMemoryTask = (config = {}) => (
@@ -1173,7 +1237,15 @@ Never copy SUBJECT_NAME or ANY_KEY_NAME literally from these instructions.
                 ? "tracked"
                 : "discovery",
             target: target
-                ? { title: target.title }
+                ? {
+                    title: target.title,
+                    worldType: cleanArchivistWorldType(
+                        readArchivistMetadata(
+                            target.card ?? {}
+                        ).worldType
+                        ?? ""
+                    )
+                }
                 : null
         };
 
@@ -1191,22 +1263,79 @@ Never copy SUBJECT_NAME or ANY_KEY_NAME literally from these instructions.
     };
 
     // ==================== ARCHIVIST STATUS COMMAND ====================
-    // Lightweight live diagnostics for the current key/value lifecycle.
+    // Combines live status and the last-run diagnostic in one visible response.
 
-    const formatArchivistTest = (
-        heading = "",
+    const formatArchivistStatus = (
         lines = []
     ) => `
->>> Archivist Test: ${heading}
-${lines.filter(Boolean).join("\n")}
+>>> Archivist Status
+${lines.join("\n")}
 <<<`.trim();
 
-    const runArchivistTestCommand = (
+    const formatArchivistDiagnosticFlag = (value) => (
+        typeof value === "boolean"
+        ? String(value)
+        : "(unknown)"
+    );
+
+    const formatArchivistLastRun = (latest = null) => {
+        if (!latest) return [
+            "",
+            "--- Last run ---",
+            "(none)"
+        ];
+
+        const fallbackCard = findArchivistCard(
+            latest.title
+            || latest.target
+            || ""
+        );
+        const worldType = cleanArchivistWorldType(
+            latest.worldType
+            || readArchivistMetadata(
+                fallbackCard ?? {}
+            ).worldType
+            || ""
+        );
+        const mode = latest.mode === "tracked"
+            ? "Maintenance"
+            : latest.mode === "discovery"
+            ? "Discovery"
+            : "(unknown)";
+
+        return [
+            "",
+            "--- Last run ---",
+            `Mode: ${mode}`,
+            `Scan turn: ${
+                Number.isInteger(latest.scanTurn)
+                ? latest.scanTurn
+                : "(unknown)"
+            }`,
+            `Completed turn: ${
+                Number.isInteger(latest.turn)
+                ? latest.turn
+                : "(unknown)"
+            }`,
+            `Tracked target: ${latest.target || "(none)"}`,
+            `Matched: ${formatArchivistDiagnosticFlag(latest.matched)}`,
+            `Valid: ${formatArchivistDiagnosticFlag(latest.valid)}`,
+            `Operation: ${latest.kind || "(unknown)"}`,
+            `World type: ${worldType || "(none)"}`,
+            `Subject: ${latest.title || "(none)"}`,
+            `Key: ${latest.key || "(none)"}`,
+            `Value: ${latest.value || "(none)"}`,
+            `Result: ${latest.result || "(unknown)"}`,
+            `Raw operation: ${latest.raw || "(none)"}`
+        ];
+    };
+
+    const runArchivistStatusCommand = (
         input = "",
         config = {}
     ) => {
         if (
-            !/^\s*\/\s*archivist[-\s]*test(?:\s+status)?\s*$/i.test(
+            !/^\s*\/arch-status\s*$/i.test(
                 input
             )
         ) {
@@ -1233,8 +1362,7 @@ ${lines.filter(Boolean).join("\n")}
 
         const latest = IS.ARCHIVIST.operation;
 
-        return formatArchivistTest(
-            "Status",
+        return formatArchivistStatus(
             [
                 `Discovery enabled: ${config.archiveDiscovery}`,
                 `Maintenance enabled: ${config.archiveMaintenance}`,
@@ -1242,6 +1370,11 @@ ${lines.filter(Boolean).join("\n")}
                 `Reject placeholder keys: ${config.archiveRejectPlaceholderKeys}`,
                 `Automatically track discovered cards: ${config.archiveAutoTrackDiscovered}`,
                 `Scheduled feature: ${IS.ARCHIVIST.scheduledFeature || "(none)"}`,
+                `Rotation step: ${
+                    Number.isInteger(IS.ARCHIVIST.rotation)
+                    ? IS.ARCHIVIST.rotation
+                    : 0
+                }`,
                 `Discovery scope: ${config.archiveScope.join(", ") || "(none)"}`,
                 `Tracked entities: ${
                     config.archiveTracked.join(", ")
@@ -1256,19 +1389,9 @@ ${lines.filter(Boolean).join("\n")}
                 `Rejected: ${IS.ARCHIVIST.stats.rejected}`,
                 `Duplicates: ${IS.ARCHIVIST.stats.duplicates}`,
                 `Errors: ${IS.ARCHIVIST.stats.errors}`,
-                latest
-                    ? `Latest: ${
-                        latest.kind
-                    } | ${
-                        latest.worldType || "(no type)"
-                    } | ${
-                        latest.title || "(none)"
-                    } | ${
-                        latest.key || "(none)"
-                    } | ${
-                        latest.result || "(unknown)"
-                    }`
-                    : "Latest: (none)"
+                ...formatArchivistLastRun(
+                    latest
+                )
             ]
         );
     };
@@ -3271,12 +3394,14 @@ Follow the format **perfectly**.
         return;
     } else if (hook === "input") {
         // ==================== INPUT HOOK ====================
-        // Archivist status reporting runs without sending a prompt to the model.
-        if (/^\s*\/\s*archivist[-\s]*test(?:\s|$)/i.test(text)) {
-            const testConfig = Config.get();
-            text = runArchivistTestCommand(text, testConfig)
-                ?? formatArchivistTest("Error", ["Test command was not recognized."]);
-            // Prevent an AI generation; this command only inspects live Archivist state.
+        // Replace the command text with visible live diagnostics.
+        if (/^\s*\/arch-status\s*$/i.test(text)) {
+            const statusConfig = Config.get();
+            text = runArchivistStatusCommand(
+                text,
+                statusConfig
+            );
+            // AI Dungeon may still append its normal story continuation afterward.
             return;
         }
         // Check for /AC command to force-enable Auto-Cards
@@ -3309,7 +3434,8 @@ Follow the format **perfectly**.
     // Automatic gameplay uses compact Inner Self-style world memories.
     let archivistMemoryOperation = IS.ARCHIVIST.pending
         ? parseArchivistMemoryOperation(
-            text
+            text,
+            IS.ARCHIVIST.pending.mode
         )
         : {
             matched: false,
@@ -3325,6 +3451,15 @@ Follow the format **perfectly**.
                 IS.ARCHIVIST.pending,
                 config
             );
+
+        archivistMemoryOperation = {
+            ...archivistMemoryOperation,
+            worldType:
+                resolveArchivistOperationWorldType(
+                    archivistMemoryOperation,
+                    IS.ARCHIVIST.pending
+                )
+        };
     }
 
     if (archivistMemoryOperation.matched) {
@@ -3356,15 +3491,43 @@ Follow the format **perfectly**.
                 );
 
             IS.ARCHIVIST.operation = {
+                mode:
+                    pending.mode
+                    ?? "",
+                scanTurn:
+                    pending.turn,
+                target:
+                    pending.target?.title
+                    ?? "",
+                matched:
+                    Boolean(
+                        archivistMemoryOperation.matched
+                    ),
+                valid:
+                    Boolean(
+                        archivistMemoryOperation.valid
+                    ),
                 kind:
                     archivistMemoryOperation.kind
                     ?? "missing",
-                                title:
+                worldType:
+                    archivistMemoryOperation.worldType
+                    ?? "",
+                title:
                     archivistMemoryOperation.title
                     ?? "",
                 key:
                     archivistMemoryOperation.key
                     ?? "",
+                value:
+                    archivistMemoryOperation.value
+                    ?? "",
+                raw:
+                    cleanArchivistValue(
+                        archivistMemoryOperation.raw
+                        ?? "",
+                        600
+                    ),
                 result:
                     result?.reason
                     ?? "unknown",
