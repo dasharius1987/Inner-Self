@@ -476,7 +476,7 @@ function InnerSelf(hook) {
         marker: "@WORLD_ARCHIVIST",
         version: 2,
         schema: "Archive",
-        cardType: "Archive"
+        fallbackCardType: "Archive"
     });
 
     const WA_ENTRY_LIMIT = 1600;
@@ -521,6 +521,27 @@ function InnerSelf(hook) {
         return (readable === readable.toLowerCase())
             ? readable.replace(/\b[a-z]/g, letter => letter.toUpperCase())
             : readable;
+    };
+
+    const cleanWorldArchivistWorldType = (worldType = "") => (
+        cleanWorldArchivistValue(worldType, 100)
+            .replace(/[|:=`]+/g, "")
+            .replace(/\s+/g, " ")
+            .trim()
+    );
+
+    /**
+     * Uses native AI Dungeon card types when the model's declared WORLD_TYPE
+     * clearly matches one. All other values remain visible as custom types.
+     */
+    const resolveWorldArchivistCardType = (worldType = "") => {
+        const clean = cleanWorldArchivistWorldType(worldType);
+        const normalized = clean.toLowerCase().replace(/[^a-z]+/g, "");
+
+        if (["location", "locations"].includes(normalized)) return "location";
+        if (["faction", "factions"].includes(normalized)) return "faction";
+
+        return clean || WA.fallbackCardType;
     };
 
     const cleanWorldArchivistMemoryKey = (key = "") => {
@@ -609,17 +630,35 @@ function InnerSelf(hook) {
         .map(([key, value]) => `${cleanWorldArchivistMemoryKey(key)}: ${cleanWorldArchivistValue(value, WA_MEMORY_VALUE_LIMIT)}`)
         .join("\n");
 
-    const createWorldArchivistCard = ({ title = "", entry = "", triggers = [], turn = history.length } = {}) => {
+    const createWorldArchivistCard = ({
+        title = "",
+        worldType = "",
+        entry = "",
+        triggers = [],
+        turn = history.length
+    } = {}) => {
         title = cleanWorldArchivistTitle(title);
+        worldType = cleanWorldArchivistWorldType(worldType);
         entry = renderWorldArchivistMemories(parseWorldArchivistMemories(entry));
         const id = worldArchivistId(title);
-        if (id === "" || entry === "") return { ok: false, reason: "invalid_memory" };
+        if (id === "" || worldType === "" || entry === "") return { ok: false, reason: "invalid_memory" };
         if (findWorldArchivistCard(id)) return { ok: false, reason: "already_exists" };
         if (findWorldArchivistTitleCollision(title)) return { ok: false, reason: "manual_collision" };
-        const metadata = { version: WA.version, id, schema: WA.schema, createdTurn: turn, updatedTurn: turn };
+        const metadata = {
+            version: WA.version,
+            id,
+            schema: WA.schema,
+            worldType,
+            createdTurn: turn,
+            updatedTurn: turn
+        };
         const card = addStoryCard(
-            cleanWorldArchivistTriggers(title, triggers).join(", "), entry,
-            WA.cardType, title, writeWorldArchivistMetadata(metadata), { returnCard: true }
+            cleanWorldArchivistTriggers(title, triggers).join(", "),
+            entry,
+            resolveWorldArchivistCardType(worldType),
+            title,
+            writeWorldArchivistMetadata(metadata),
+            { returnCard: true }
         );
         return card ? { ok: true, reason: "created", card } : { ok: false, reason: "creation_failed" };
     };
@@ -632,7 +671,7 @@ function InnerSelf(hook) {
         if (renderWorldArchivistMemories(parseWorldArchivistMemories(card.entry ?? "")) === entry) return { ok: true, reason: "unchanged", card };
         const metadata = readWorldArchivistMetadata(card);
         metadata.updatedTurn = turn;
-        card.entry = entry; card.type = WA.cardType;
+        card.entry = entry;
         card.description = writeWorldArchivistMetadata(metadata, readWorldArchivistNotes(card));
         return { ok: true, reason: "rewritten", card };
     };
@@ -650,13 +689,26 @@ function InnerSelf(hook) {
         if (IS.WA?.stats && Object.prototype.hasOwnProperty.call(IS.WA.stats, key) && Number.isInteger(IS.WA.stats[key])) IS.WA.stats[key]++;
     };
 
-    const assignWorldArchivistMemory = ({ title = "", key = "", value = "", turn = history.length } = {}) => {
+    const assignWorldArchivistMemory = ({
+        title = "",
+        worldType = "",
+        key = "",
+        value = "",
+        turn = history.length
+    } = {}) => {
         title = cleanWorldArchivistTitle(title);
+        worldType = cleanWorldArchivistWorldType(worldType);
         key = cleanWorldArchivistMemoryKey(key);
         value = cleanWorldArchivistValue(value, WA_MEMORY_VALUE_LIMIT);
         if (worldArchivistId(title) === "" || key === "" || value === "") return { ok: false, reason: "invalid_memory" };
         const card = findWorldArchivistCard(title);
-        if (!card) return createWorldArchivistCard({ title, entry: `${key}: ${value}`, triggers: [title], turn });
+        if (!card) return createWorldArchivistCard({
+            title,
+            worldType,
+            entry: `${key}: ${value}`,
+            triggers: [title],
+            turn
+        });
         const memories = parseWorldArchivistMemories(card.entry ?? "");
         if (memories[key] === value) return { ok: true, reason: "unchanged", card };
         const existed = Object.prototype.hasOwnProperty.call(memories, key);
@@ -695,6 +747,28 @@ function InnerSelf(hook) {
             if (deletion) {
                 const title = cleanWorldArchivistTitle(deletion[1]), key = cleanWorldArchivistMemoryKey(deletion[2]);
                 return { matched: true, valid: title !== "" && key !== "", kind: "delete_memory", title, key, raw, start, end, rest };
+            }
+            const typedAssignment = inner.match(
+                /^world\s+([^|:\n]+)\s*\|\s*([^|:\n]+)\s*\|\s*([^=\n]+?)\s*=\s*([\s\S]+)$/i
+            );
+            if (typedAssignment) {
+                const worldType = cleanWorldArchivistWorldType(typedAssignment[1]);
+                const title = cleanWorldArchivistTitle(typedAssignment[2]);
+                const key = cleanWorldArchivistMemoryKey(typedAssignment[3]);
+                const value = cleanWorldArchivistValue(typedAssignment[4], WA_MEMORY_VALUE_LIMIT);
+                return {
+                    matched: true,
+                    valid: worldType !== "" && title !== "" && key !== "" && value !== "",
+                    kind: "assign_memory",
+                    worldType,
+                    title,
+                    key,
+                    value,
+                    raw,
+                    start,
+                    end,
+                    rest
+                };
             }
             const assignment = inner.match(/^world\s+([^|:\n]+)\s*\|\s*([^=\n]+?)\s*=\s*([\s\S]+)$/i);
             if (assignment) {
@@ -752,7 +826,13 @@ function InnerSelf(hook) {
         if (!operation.matched || !operation.valid) { countWorldArchivistResult("errors"); return { ok: false, reason: operation.matched ? "malformed" : "missing" }; }
         if (operation.kind === "none") { countWorldArchivistResult("none"); return { ok: true, reason: "none" }; }
         const result = operation.kind === "assign_memory"
-            ? assignWorldArchivistMemory({ title: operation.title, key: operation.key, value: operation.value, turn })
+            ? assignWorldArchivistMemory({
+                title: operation.title,
+                worldType: operation.worldType,
+                key: operation.key,
+                value: operation.value,
+                turn
+            })
             : operation.kind === "delete_memory"
             ? deleteWorldArchivistMemory({ title: operation.title, key: operation.key, turn })
             : { ok: false, reason: "unknown_operation" };
@@ -882,11 +962,14 @@ Start your output immediately with exactly one of these forms:
 
 (world none)
 
-(world SUBJECT_NAME | ANY_KEY_NAME = \`One short objective world fact.\`)
+(world WORLD_TYPE | SUBJECT_NAME | ANY_KEY_NAME = \`One short objective world fact.\`)
 
 Inside the parentheses:
 
 - Copy world literally.
+- Then write one space and the exact WORLD_TYPE selected in Short Task A.
+- Copy the chosen WORLD_TYPE exactly as you selected it.
+- Then write one space, "|", and one space.
 - SUBJECT_NAME must be the readable story name with normal spaces, never snake_case or underscores.
 - Then write one space, "|", and one space.
 - ANY_KEY_NAME:
@@ -912,7 +995,7 @@ Never copy SUBJECT_NAME or ANY_KEY_NAME literally from these instructions.
 
 ## EXACT SHAPE
 
-(world Example Subject | example_key = \`One short objective world fact.\`) Story continues from ${config.player}'s second-person perspective...
+(world Locations | Example Subject | example_key = \`One short objective world fact.\`) Story continues from ${config.player}'s second-person perspective...
 </SYSTEM>`.trim();
 
     /**
@@ -1081,6 +1164,8 @@ ${lines.filter(Boolean).join("\n")}
                 latest
                     ? `Latest: ${
                         latest.kind
+                    } | ${
+                        latest.worldType || "(no type)"
                     } | ${
                         latest.title || "(none)"
                     } | ${
