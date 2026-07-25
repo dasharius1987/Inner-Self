@@ -24,7 +24,7 @@ globalThis.MainSettings = (class MainSettings {
     // (write a comma separated list of names inside the "" like so: "Leah, Lily, Lydia")
     ,
     // Is Inner Self already enabled when the adventure begins?
-    IS_INNER_SELF_ENABLED_BY_DEFAULT: true
+    IS_INNER_SELF_ENABLED_BY_DEFAULT: false
     // (true or false)
     ,
     // Is Archivist Discovery enabled when the adventure begins?
@@ -32,7 +32,11 @@ globalThis.MainSettings = (class MainSettings {
     // (true or false)
     ,
     // Is tracked Archivist Maintenance enabled when the adventure begins?
-    IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT: true
+    IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT: false
+    // (true or false)
+    ,
+    // Should Archivist model operations remain visible in the story output?
+    IS_ARCHIVIST_DEBUG_MODE_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
     // Should obvious prompt-placeholder keys be rejected?
@@ -263,7 +267,7 @@ function InnerSelf(hook) {
     // (write a comma separated list of names inside the "" like so: "Leah, Lily, Lydia")
     ,
     // Is Inner Self already enabled when the adventure begins?
-    IS_INNER_SELF_ENABLED_BY_DEFAULT: true
+    IS_INNER_SELF_ENABLED_BY_DEFAULT: false
     // (true or false)
     ,
     // Is Archivist Discovery enabled when the adventure begins?
@@ -271,7 +275,11 @@ function InnerSelf(hook) {
     // (true or false)
     ,
     // Is tracked Archivist Maintenance enabled when the adventure begins?
-    IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT: true
+    IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT: false
+    // (true or false)
+    ,
+    // Should Archivist model operations remain visible in the story output?
+    IS_ARCHIVIST_DEBUG_MODE_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
     // Should obvious prompt-placeholder keys be rejected?
@@ -412,6 +420,7 @@ function InnerSelf(hook) {
             hash: "",
             pending: null,
             operation: null,
+            failures: [],
             statusRequested: false,
             lastTurn: -1,
             lastScanTurn: -1,
@@ -501,6 +510,7 @@ function InnerSelf(hook) {
     const ARCHIVIST_MEMORY_VALUE_LIMIT = 500;
     const ARCHIVIST_MEMORY_LIMIT_PER_CARD = 30;
     const ARCHIVIST_DISCOVERY_FACT_LIMITS = Object.freeze([1, 2, 3]);
+    const ARCHIVIST_FAILURE_HISTORY_LIMIT = 10;
     const ARCHIVIST_RESERVED_MEMORY_KEYS = new Set([
         "any_key_name", "memory_key", "key", "new_key", "example_key",
         "snake_case_key", "descriptive_fact_key", "unwanted_key"
@@ -729,6 +739,27 @@ function InnerSelf(hook) {
         if (IS.ARCHIVIST?.stats && Object.prototype.hasOwnProperty.call(IS.ARCHIVIST.stats, key) && Number.isInteger(IS.ARCHIVIST.stats[key])) IS.ARCHIVIST.stats[key]++;
     };
 
+    const recordArchivistFailure = (diagnostic = {}) => {
+        if (!Array.isArray(IS.ARCHIVIST.failures)) {
+            IS.ARCHIVIST.failures = [];
+        }
+
+        IS.ARCHIVIST.failures.push({
+            ...diagnostic
+        });
+
+        if (
+            ARCHIVIST_FAILURE_HISTORY_LIMIT
+            < IS.ARCHIVIST.failures.length
+        ) {
+            IS.ARCHIVIST.failures.splice(
+                0,
+                IS.ARCHIVIST.failures.length
+                - ARCHIVIST_FAILURE_HISTORY_LIMIT
+            );
+        }
+    };
+
     const assignArchivistMemory = ({
         title = "",
         worldType = "",
@@ -942,7 +973,27 @@ function InnerSelf(hook) {
             : false
         );
         if (!routeEnabled) { countArchivistResult("rejected"); return { ok: false, reason: "disabled" }; }
-        if (!operation.matched || !operation.valid) { countArchivistResult("errors"); return { ok: false, reason: operation.matched ? "malformed" : "missing" }; }
+        if (!operation.matched) { countArchivistResult("errors"); return { ok: false, reason: "missing" }; }
+        if (!operation.valid) {
+            if (
+                [
+                    "existing_archive_blocked",
+                    "tracked_discovery_blocked"
+                ].includes(operation.kind)
+            ) {
+                countArchivistResult("duplicates");
+                return {
+                    ok: false,
+                    reason: operation.kind
+                };
+            }
+
+            countArchivistResult("errors");
+            return {
+                ok: false,
+                reason: "malformed"
+            };
+        }
         if (operation.kind === "none") { countArchivistResult("none"); return { ok: true, reason: "none" }; }
         const result = operation.kind === "assign_memory"
             ? assignArchivistMemory({
@@ -1051,6 +1102,18 @@ ${memories}
             pending.mode === "discovery"
             && operation.kind === "assign_memory"
         ) {
+            if (
+                findArchivistCard(
+                    operation.title
+                )
+            ) {
+                return {
+                    ...operation,
+                    valid: false,
+                    kind: "existing_archive_blocked"
+                };
+            }
+
             const allowedWorldTypes = new Set(
                 (config.archiveScope ?? []).map(
                     worldType => cleanArchivistWorldType(
@@ -1454,6 +1517,58 @@ ${lines.join("\n")}
         ];
     };
 
+    const formatArchivistFailureHistory = (
+        failures = []
+    ) => {
+        const recent = Array.isArray(failures)
+            ? failures
+                .filter(failure => (
+                    failure
+                    && typeof failure === "object"
+                    && !Array.isArray(failure)
+                ))
+                .slice(
+                    -ARCHIVIST_FAILURE_HISTORY_LIMIT
+                )
+                .reverse()
+            : [];
+
+        if (recent.length === 0) return [
+            "",
+            "--- Recent failed operations ---",
+            "(none)"
+        ];
+
+        return [
+            "",
+            `--- Recent failed operations (newest first, max ${ARCHIVIST_FAILURE_HISTORY_LIMIT}) ---`,
+            ...recent.flatMap(
+                (failure, index) => [
+                    `${
+                        index + 1
+                    }. Turn ${
+                        Number.isInteger(failure.turn)
+                        ? failure.turn
+                        : "(unknown)"
+                    } | ${
+                        failure.mode === "tracked"
+                        ? "Maintenance"
+                        : failure.mode === "discovery"
+                        ? "Discovery"
+                        : "(unknown)"
+                    } | ${
+                        failure.result
+                        || "(unknown)"
+                    }`,
+                    `Raw operation: ${
+                        failure.raw
+                        || "(none)"
+                    }`
+                ]
+            )
+        ];
+    };
+
     const buildArchivistStatus = (
         config = {}
     ) => {
@@ -1481,6 +1596,7 @@ ${lines.join("\n")}
             [
                 `Discovery enabled: ${config.archiveDiscovery}`,
                 `Maintenance enabled: ${config.archiveMaintenance}`,
+                `Debug mode: ${config.archiveDebug}`,
                 `Discovery strictness: ${config.archiveDiscoveryStrictness}`,
                 `Maximum facts per discovery: ${config.archiveMaximumDiscoveryFacts}`,
                 `Reject placeholder keys: ${config.archiveRejectPlaceholderKeys}`,
@@ -1507,12 +1623,49 @@ ${lines.join("\n")}
                 `Errors: ${IS.ARCHIVIST.stats.errors}`,
                 ...formatArchivistLastRun(
                     latest
+                ),
+                ...formatArchivistFailureHistory(
+                    IS.ARCHIVIST.failures
                 )
             ]
         );
     };
 
+    let archivistDebugOperationOutput = "";
+    let archivistDebugOperationAppended = false;
+
+    const appendArchivistDebugOperation = () => {
+        if (
+            archivistDebugOperationAppended
+            || archivistDebugOperationOutput === ""
+        ) {
+            return;
+        }
+
+        archivistDebugOperationAppended = true;
+
+        const hasVisibleOutput =
+            text
+                .replace(/[\u200B-\u200D]+/g, "")
+                .trim() !== "";
+
+        if (!hasVisibleOutput) {
+            text = archivistDebugOperationOutput;
+            return;
+        }
+
+        text = `${
+            archivistDebugOperationOutput
+        }${
+            /^\s/.test(text)
+            ? ""
+            : " "
+        }${text}`;
+    };
+
     const appendRequestedArchivistStatus = () => {
+        appendArchivistDebugOperation();
+
         if (!IS.ARCHIVIST.statusRequested) {
             return;
         }
@@ -1568,6 +1721,9 @@ ${lines.join("\n")}
                     ),
                 archiveMaintenance: Boolean(
                     S.IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT
+                ),
+                archiveDebug: Boolean(
+                    S.IS_ARCHIVIST_DEBUG_MODE_ENABLED_BY_DEFAULT
                 ),
                 archiveRejectPlaceholderKeys: Boolean(
                     S.IS_ARCHIVIST_PLACEHOLDER_KEY_REJECTION_ENABLED_BY_DEFAULT
@@ -1666,11 +1822,13 @@ ${lines.join("\n")}
                     [
                         "> Archivist Discovery creates valuable new Archive cards.",
                         "> Archivist Maintenance updates player-selected tracked Archive cards.",
+                        "> Debug mode keeps the raw parenthesized Archivist operation visible in the story output.",
                         "> Set Discovery strictness to Loose or Medium.",
                         "> Set Discovery scope to any subject types you want to discover, e.g. Species, Religions, Nations, Characters, Magic Systems.",
                         "> Set Maximum facts per discovery to 1, 2, or 3.",
                         `> Enable Discovery: ${fallback.archiveDiscovery}`,
                         `> Enable Maintenance: ${fallback.archiveMaintenance}`,
+                        `> Debug mode: ${fallback.archiveDebug}`,
                         `> Discovery strictness: ${fallback.archiveDiscoveryStrictness}`,
                         `> Maximum facts per discovery: ${fallback.archiveMaximumDiscoveryFacts}`,
                         `> Reject placeholder keys: ${fallback.archiveRejectPlaceholderKeys}`,
@@ -1732,6 +1890,12 @@ ${lines.join("\n")}
                     fallback.archiveMaintenance
                 );
 
+            const archiveDebug =
+                parseBoolean(
+                    extract.debugmode,
+                    fallback.archiveDebug
+                );
+
             const archiveDiscoveryStrictness =
                 cleanArchivistDiscoveryStrictness(
                     extract.discoverystrictness
@@ -1789,11 +1953,13 @@ ${lines.join("\n")}
             card.entry = [
                 "> Archivist Discovery creates valuable new Archive cards.",
                 "> Archivist Maintenance updates player-selected tracked Archive cards.",
+                "> Debug mode keeps the raw parenthesized Archivist operation visible in the story output.",
                 "> Set Discovery strictness to Loose or Medium.",
                 "> Set Discovery scope to any subject types you want to discover, e.g. Species, Religions, Nations, Characters, Magic Systems.",
                 "> Set Maximum facts per discovery to 1, 2, or 3.",
                 `> Enable Discovery: ${archiveDiscovery}`,
                 `> Enable Maintenance: ${archiveMaintenance}`,
+                `> Debug mode: ${archiveDebug}`,
                 `> Discovery strictness: ${archiveDiscoveryStrictness}`,
                 `> Maximum facts per discovery: ${archiveMaximumDiscoveryFacts}`,
                 `> Reject placeholder keys: ${archiveRejectPlaceholderKeys}`,
@@ -1812,6 +1978,7 @@ ${lines.join("\n")}
                 card,
                 archiveDiscovery,
                 archiveMaintenance,
+                archiveDebug,
                 archiveDiscoveryStrictness,
                 archiveMaximumDiscoveryFacts,
                 archiveRejectPlaceholderKeys,
@@ -1843,6 +2010,7 @@ ${lines.join("\n")}
      * @property {boolean} auto - Is Auto-Cards enabled?
      * @property {boolean} archiveDiscovery - Is Archivist Discovery enabled?
      * @property {boolean} archiveMaintenance - Is tracked Archive maintenance enabled?
+     * @property {boolean} archiveDebug - Are raw Archivist operations visible in story output?
      * @property {"Loose"|"Medium"} archiveDiscoveryStrictness - How readily Discovery creates Archive cards
      * @property {1|2|3} archiveMaximumDiscoveryFacts - Maximum coherent facts stored by one Discovery operation
      * @property {boolean} archiveRejectPlaceholderKeys - Are literal prompt-placeholder keys rejected?
@@ -3618,6 +3786,12 @@ Follow the format **perfectly**.
     }
 
     if (archivistMemoryOperation.matched) {
+        if (config.archiveDebug) {
+            archivistDebugOperationOutput =
+                archivistMemoryOperation.raw
+                ?? "";
+        }
+
         text =
             archivistMemoryOperation.rest
             || " ";
@@ -3645,7 +3819,7 @@ Follow the format **perfectly**.
                     pending
                 );
 
-            IS.ARCHIVIST.operation = {
+            const diagnostic = {
                 mode:
                     pending.mode
                     ?? "",
@@ -3689,6 +3863,15 @@ Follow the format **perfectly**.
                 turn:
                     history.length
             };
+
+            IS.ARCHIVIST.operation =
+                diagnostic;
+
+            if (!result?.ok) {
+                recordArchivistFailure(
+                    diagnostic
+                );
+            }
 
             IS.ARCHIVIST.lastTurn =
                 history.length;
