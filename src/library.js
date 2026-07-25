@@ -3965,6 +3965,7 @@ I hope you will have lots of fun!
         if (text === "") {
             // Guard against empty string outputs to avoid a known AID bug
             text = "\u200B";
+            appendRequestedArchivistStatus();
             return;
         }
         const prevText = getPrevAction()?.text ?? "";
@@ -3976,6 +3977,7 @@ I hope you will have lots of fun!
             // Ensure taskless outputs still have a space of separation from the previous action
             text = ` ${text}`;
         }
+        appendRequestedArchivistStatus();
         return;
     }
     /**
