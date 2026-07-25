@@ -43,9 +43,9 @@ globalThis.MainSettings = (class MainSettings {
     IS_ARCHIVIST_AUTO_TRACK_DISCOVERED_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
-    // Which subject categories may Archivist Discovery consider?
-    ARCHIVIST_DISCOVERY_SCOPE: "Locations, settlements, factions, cultures, institutions, artifacts, world rules"
-    // (comma-separated exhaustive discovery categories)
+    // Which subject types may Archivist Discovery consider?
+    ARCHIVIST_DISCOVERY_SCOPE: "Locations, settlements, factions, cultures, institutions, artifacts, deities"
+    // (comma-separated exhaustive discovery types)
     ,
     // How readily should Archivist Discovery create cards?
     ARCHIVIST_DISCOVERY_STRICTNESS: "Medium"
@@ -282,9 +282,9 @@ function InnerSelf(hook) {
     IS_ARCHIVIST_AUTO_TRACK_DISCOVERED_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
-    // Which subject categories may Archivist Discovery consider?
-    ARCHIVIST_DISCOVERY_SCOPE: "Locations, settlements, factions, cultures, institutions, artifacts, world rules"
-    // (comma-separated exhaustive discovery categories)
+    // Which subject types may Archivist Discovery consider?
+    ARCHIVIST_DISCOVERY_SCOPE: "Locations, settlements, factions, cultures, institutions, artifacts, deities"
+    // (comma-separated exhaustive discovery types)
     ,
     // How readily should Archivist Discovery create cards?
     ARCHIVIST_DISCOVERY_STRICTNESS: "Medium"
@@ -412,6 +412,7 @@ function InnerSelf(hook) {
             hash: "",
             pending: null,
             operation: null,
+            statusRequested: false,
             lastTurn: -1,
             lastScanTurn: -1,
             scheduleHash: "",
@@ -1147,7 +1148,7 @@ ${config.archiveScope.join("\n") || "(none)"}
 A candidate qualifies only if all of the following apply:
 
 - It is a distinct, persistent subject rather than a temporary event, condition, or detail of the current scene.
-- Except for world rules, it is explicitly named or titled in the story.
+- It is explicitly named or titled in the story.
 - Use the story-given name. Never create or expand a subject name from a description.
 - The subject itself directly and naturally fits an allowed TYPE. Association with something of an allowed TYPE is not enough.
 - It is useful for future continuity, established world understanding, or an ongoing plot thread.
@@ -1159,8 +1160,6 @@ A first substantial introduction may qualify; recurrence is not required.
 Reject generic scenery, incidental names, ordinary objects, scene-bound encounters, temporary events or conditions, and flavor-only details.
 
 Directly established relationships are allowed. Do not speculate or derive facts through logical chains.
-
-World rules are the only exception to the naming requirement. A world rule may qualify only when the context explicitly establishes it as a general, enduring rule of the setting. Give it a concise descriptive title without adding meaning not present in the context.
 
 If several candidates qualify, choose the one with the greatest lasting continuity value.
 
@@ -1455,18 +1454,9 @@ ${lines.join("\n")}
         ];
     };
 
-    const runArchivistStatusCommand = (
-        input = "",
+    const buildArchivistStatus = (
         config = {}
     ) => {
-        if (
-            !/^\s*\/arch-status\s*$/i.test(
-                input
-            )
-        ) {
-            return null;
-        }
-
         const ownedCards = storyCards.filter(card => (
             Object.keys(
                 readArchivistMetadata(card)
@@ -1522,6 +1512,26 @@ ${lines.join("\n")}
         );
     };
 
+    const appendRequestedArchivistStatus = () => {
+        if (!IS.ARCHIVIST.statusRequested) {
+            return;
+        }
+
+        IS.ARCHIVIST.statusRequested = false;
+
+        const status = buildArchivistStatus(
+            Config.get()
+        );
+        const hasVisibleOutput =
+            text
+                .replace(/[\u200B-\u200D]+/g, "")
+                .trim() !== "";
+
+        text = hasVisibleOutput
+            ? `${text.trimEnd()}\n\n${status}`
+            : `${text}${status}`;
+    };
+
     // ==================== ARCHIVIST CONFIGURATION ====================
     const ARCHIVIST_CONFIG_KEY = "@ARCHIVIST_CONFIG";
 
@@ -1555,7 +1565,6 @@ ${lines.join("\n")}
                 archiveMaximumDiscoveryFacts:
                     cleanArchivistMaximumDiscoveryFacts(
                         S.ARCHIVIST_MAXIMUM_FACTS_PER_DISCOVERY
-                        ?? S.ARCHIVIST_MAXIMUM_ENTRIES_PER_DISCOVERY
                     ),
                 archiveMaintenance: Boolean(
                     S.IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT
@@ -1657,6 +1666,8 @@ ${lines.join("\n")}
                     [
                         "> Archivist Discovery creates valuable new Archive cards.",
                         "> Archivist Maintenance updates player-selected tracked Archive cards.",
+                        "> Set Discovery strictness to Loose or Medium.",
+                        "> Set Discovery scope to any subject types you want to discover, e.g. Species, Religions, Nations, Characters, Magic Systems.",
                         "> Set Maximum facts per discovery to 1, 2, or 3.",
                         `> Enable Discovery: ${fallback.archiveDiscovery}`,
                         `> Enable Maintenance: ${fallback.archiveMaintenance}`,
@@ -1730,7 +1741,6 @@ ${lines.join("\n")}
             const archiveMaximumDiscoveryFacts =
                 cleanArchivistMaximumDiscoveryFacts(
                     extract.maximumfactsperdiscovery
-                    ?? extract.maximumentriesperdiscovery
                     ?? fallback.archiveMaximumDiscoveryFacts,
                     fallback.archiveMaximumDiscoveryFacts
                 );
@@ -1779,6 +1789,8 @@ ${lines.join("\n")}
             card.entry = [
                 "> Archivist Discovery creates valuable new Archive cards.",
                 "> Archivist Maintenance updates player-selected tracked Archive cards.",
+                "> Set Discovery strictness to Loose or Medium.",
+                "> Set Discovery scope to any subject types you want to discover, e.g. Species, Religions, Nations, Characters, Magic Systems.",
                 "> Set Maximum facts per discovery to 1, 2, or 3.",
                 `> Enable Discovery: ${archiveDiscovery}`,
                 `> Enable Maintenance: ${archiveMaintenance}`,
@@ -1835,8 +1847,8 @@ ${lines.join("\n")}
      * @property {1|2|3} archiveMaximumDiscoveryFacts - Maximum coherent facts stored by one Discovery operation
      * @property {boolean} archiveRejectPlaceholderKeys - Are literal prompt-placeholder keys rejected?
      * @property {boolean} archiveAutoTrackDiscovered - Are newly discovered Archive card names automatically added to the tracked list?
-     * @property {string[]} archiveScope - Exhaustive subject categories allowed for Discovery
-     * @property {string[]} archiveTracked - Player-selected world entity names
+     * @property {string[]} archiveScope - Exhaustive subject types allowed for Discovery
+     * @property {string[]} archiveTracked - Player-selected Archive subject names
      * @property {string[]} agents - All agent names, ordered from highest to lowest trigger priority
      */
     /**
@@ -3539,16 +3551,13 @@ Follow the format **perfectly**.
         return;
     } else if (hook === "input") {
         // ==================== INPUT HOOK ====================
-        // Replace the command text with visible live diagnostics.
+        // Defer live diagnostics until after this turn's model output is processed.
         if (/^\s*\/arch-status\s*$/i.test(text)) {
-            const statusConfig = Config.get();
-            text = runArchivistStatusCommand(
-                text,
-                statusConfig
-            );
-            // AI Dungeon may still append its normal story continuation afterward.
+            IS.ARCHIVIST.statusRequested = true;
+            text = "\u200B";
             return;
         }
+        IS.ARCHIVIST.statusRequested = false;
         // Check for /AC command to force-enable Auto-Cards
         if (IS.AC.enabled || !/\/\s*A\s*C/i.test(text) || !hasAutoCards()) {
             // Normal input processing
@@ -3568,6 +3577,7 @@ Follow the format **perfectly**.
     } else if ((text.includes(">>>") && text.includes("<<<")) || (3000 < text.length)) {
         // Output contains an Auto-Cards thingy or is suspiciously long
         // Safer to leave untouched
+        appendRequestedArchivistStatus();
         IS.agent = "";
         return;
     }
@@ -3824,11 +3834,13 @@ I hope you will have lots of fun!
 (please erase before continuing) <<<
         `.trim();
         prespace();
+        appendRequestedArchivistStatus();
         IS.agent = "";
         return;
     } else if (!config.allow) {
         // Early exit if Inner Self is disabled
         text ||= "\u200B";
+        appendRequestedArchivistStatus();
         IS.agent = "";
         return;
     }
@@ -4287,6 +4299,7 @@ I hope you will have lots of fun!
         // Ensure all between-action linebreaks are equally spaced
         prespace();
     }
+    appendRequestedArchivistStatus();
     // ==================== OPERATION EXECUTOR ====================
     // Execute queued Archivist and brain operations independently.
     const hash = historyHash();
