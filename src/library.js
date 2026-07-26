@@ -35,7 +35,7 @@ globalThis.MainSettings = (class MainSettings {
     IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT: false
     // (true or false)
     ,
-    // Should Archivist model operations remain visible in the story output?
+    // Should Archivist Discovery operations be logged to a DEBUG card?
     IS_ARCHIVIST_DEBUG_MODE_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
@@ -48,7 +48,7 @@ globalThis.MainSettings = (class MainSettings {
     // (true or false)
     ,
     // Which subject types may Archivist Discovery consider?
-    ARCHIVIST_DISCOVERY_SCOPE: "Location, Settlement, Faction, Culture, Institution, Artifact, Deity"
+    ARCHIVIST_DISCOVERY_SCOPE: "Settlement, Faction, Culture, Artifact, Deity"
     // (comma-separated exhaustive discovery types)
     ,
     // How readily should Archivist Discovery create cards?
@@ -278,7 +278,7 @@ function InnerSelf(hook) {
     IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT: false
     // (true or false)
     ,
-    // Should Archivist model operations remain visible in the story output?
+    // Should Archivist Discovery operations be logged to a DEBUG card?
     IS_ARCHIVIST_DEBUG_MODE_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
@@ -291,7 +291,7 @@ function InnerSelf(hook) {
     // (true or false)
     ,
     // Which subject types may Archivist Discovery consider?
-    ARCHIVIST_DISCOVERY_SCOPE: "Location, Settlement, Faction, Culture, Institution, Artifact, Deity"
+    ARCHIVIST_DISCOVERY_SCOPE: "Settlement, Faction, Culture, Artifact, Deity"
     // (comma-separated exhaustive discovery types)
     ,
     // How readily should Archivist Discovery create cards?
@@ -807,26 +807,15 @@ function InnerSelf(hook) {
     ) => {
         const fields = [];
         let start = 0;
-        let insideBackticks = false;
 
         for (
             let index = 0;
             index < source.length;
             index++
         ) {
-            const character = source[index];
-
             if (
-                character === "`"
-                && source[index - 1] !== "\\"
-            ) {
-                insideBackticks = !insideBackticks;
-                continue;
-            }
-
-            if (
-                character === "|"
-                && !insideBackticks
+                source[index] === "|"
+                && fields.length < 2
             ) {
                 fields.push(
                     source.slice(start, index).trim()
@@ -837,6 +826,26 @@ function InnerSelf(hook) {
 
         fields.push(source.slice(start).trim());
         return fields;
+    };
+
+    const cleanArchivistFactValue = (
+        value = "",
+        limit = ARCHIVIST_MEMORY_VALUE_LIMIT
+    ) => {
+        if (typeof value !== "string") return "";
+
+        let raw = value.trim();
+        const quote = raw[0];
+
+        if (
+            1 < raw.length
+            && ["`", "'"].includes(quote)
+            && raw.endsWith(quote)
+        ) {
+            raw = raw.slice(1, -1);
+        }
+
+        return cleanArchivistValue(raw, limit);
     };
 
     const parseArchivistMemoryOperation = (
@@ -889,7 +898,7 @@ function InnerSelf(hook) {
                             ?? ""
                         );
                     const value =
-                        cleanArchivistValue(
+                        cleanArchivistFactValue(
                             assignment?.[2]
                             ?? "",
                             ARCHIVIST_MEMORY_VALUE_LIMIT
@@ -921,7 +930,7 @@ function InnerSelf(hook) {
                 const assignment = inner.match(/^([^|:\n]+)\s*\|\s*([^|=\n]+?)\s*=\s*([\s\S]+)$/i);
                 if (assignment) {
                     const title = cleanArchivistTitle(assignment[1]), key = cleanArchivistMemoryKey(assignment[2]);
-                    const value = cleanArchivistValue(assignment[3], ARCHIVIST_MEMORY_VALUE_LIMIT);
+                    const value = cleanArchivistFactValue(assignment[3], ARCHIVIST_MEMORY_VALUE_LIMIT);
                     return { matched: true, valid: title !== "" && key !== "" && value !== "", kind: "assign_memory", title, key, value, raw, start, end, rest };
                 }
             }
@@ -1038,6 +1047,10 @@ function InnerSelf(hook) {
                 || Array.isArray(card)
                 || typeof card.title !== "string"
             ) {
+                continue;
+            }
+
+            if (card.keys === ARCHIVIST_DEBUG_KEY) {
                 continue;
             }
 
@@ -1203,12 +1216,6 @@ ${memories}
 <SYSTEM>
 # CANDIDATE SELECTION (REQUIRED)
 
-Evaluate the story context for CANDIDATES that are explicitly named or titled subjects found in the supplied story context.
-
-You must evaluate every CANDIDATE against every RULE below to qualify them for further usage.
-
-Reject every CANDIDATE that breaks any rule. You may end up with no qualified CANDIDATE.
-
 ## VARIABLES (REQUIRED)
 
 <ARCH_EXISTING>
@@ -1219,17 +1226,36 @@ ${buildArchivistTitleIndex()}
 ${config.archiveScope.join("\n") || "(none)"}
 </ARCH_TYPES>
 
-## RULES (REQUIRED)
+## FIND CANDIDATES (REQUIRED)
+
+Find every CANDIDATE that is an explicitly named or titled subject in the supplied story context.
+
+## DISCARD EXISTING SUBJECTS (REQUIRED)
+
+<ARCH_EXISTING> is an exclusion list. Every line names a subject that is unavailable for Discovery.
+
+Before applying any other rule, compare every CANDIDATE against every subject in <ARCH_EXISTING>.
+
+Immediately and permanently discard every CANDIDATE that already exists there or is a clear alias of an existing subject. Never qualify or output a discarded CANDIDATE.
+
+## QUALIFY REMAINING CANDIDATES (REQUIRED)
+
+Evaluate every remaining CANDIDATE against every RULE below.
+
+Reject every CANDIDATE that breaks any rule. You may end up with no qualified CANDIDATE.
 
 To qualify, a CANDIDATE:
 
-- must not already exist in <ARCH_EXISTING> and must not be a clear alias of an existing subject.
 - must be naturally described by one item in <ARCH_TYPES>. Logical chains or associations are not allowed.
 - must be a distinct and persistent subject that remains identifiable beyond the current scene.
 - must not be generic scenery, an ordinary object, a temporary event, a temporary condition, or a flavor-only detail.
-- must have at least one significant and relevant fact that describes the CANDIDATE in the provided story context.
+- must have at least one significant and relevant fact that describes the CANDIDATE in the provided story context. Select one such fact while qualifying the CANDIDATE.
 - must be worth remembering for future continuity, world understanding, or the ongoing plot.
 - should not be rejected because of its lack of recurrence. A single sufficiently significant introduction may be enough.
+
+## CHOOSE ONE CANDIDATE (REQUIRED)
+
+If more than one CANDIDATE qualifies, discard every qualified CANDIDATE except the one with the greatest lasting continuity value.
 
 # STRICT OUTPUT FORMAT (REQUIRED)
 
@@ -1239,21 +1265,20 @@ You must output exactly one parenthetical task followed by the story continuatio
 
 If you have no qualified CANDIDATE, simply output (none) followed by the STORY CONTINUATION.
 
-## ONE OR MORE QUALIFIED CANDIDATES (OPTION B)
+## ONE QUALIFIED CANDIDATE (OPTION B)
 
-If you have more than one qualified CANDIDATE, you must choose the one with the greatest lasting continuity value.
-Now, with one qualified CANDIDATE left, use the following format:
+Use the following format:
 (TYPE | NAME | KEY = \`FACT\`)
 
 Inside the parentheses:
 
-- TYPE must naturally describe the chosen qualified CANDIDATE with an item from ARCH_TYPES.
+- Replace TYPE with the item from ARCH_TYPES that describes the qualified CANDIDATE.
 - Then a space, then "|", then a space.
-- NAME must be the readable story name of the chosen qualified CANDIDATE with normal spaces, never snake_case or underscores.
+- Replace NAME with the qualified CANDIDATE's readable story name using normal spaces, never snake_case or underscores.
 - Then a space, then "|", then a space.
-- KEY must consist of 1-3 descriptive lowercase snake_case words that describe the FACT about the chosen qualified CANDIDATE.
+- Replace KEY with 1-3 descriptive lowercase snake_case words that describe the selected FACT.
 - Then a space, then "=", then a space, then "\`".
-- FACT must be one coherent, significant and relevant fact that describes the CANDIDATE in the provided story context.
+- Replace FACT with the significant and relevant fact that qualified the CANDIDATE.
 - End the sentence with a period and backtick inside the parentheses; close with ".\`)".
 
 TYPE, NAME, KEY and FACT must not be copied literally.
@@ -1262,10 +1287,6 @@ TYPE, NAME, KEY and FACT must not be copied literally.
 
 - After the closing parenthesis, add a space.
 - Continue the story as if this entire System entry had not existed.
-
-## EXACT SHAPE
-
-(Location | Deepwood | location_description = \`Deepwood is a vast forest known for its natural balance.\`) Lyra presses her body against the tree and looks at...
 </SYSTEM>`.trim();
 
     const buildLooseArchivistMemoryTask = (config = {}) => `
@@ -1341,10 +1362,6 @@ Never copy SUBJECT_NAME or ANY_KEY_NAME literally from these instructions.
 - Write from ${config.player}'s second-person present-tense perspective.
 - The story must continue where it previously ended.
 - The story continuation must occupy most of the response.
-
-## EXACT SHAPE
-
-(Location | Example Subject | example_key = \`One short objective world fact.\`) Story continues from ${config.player}'s second-person perspective...
 </SYSTEM>`.trim();
 
     const buildArchivistMemoryTask = (config = {}) => (
@@ -1641,41 +1658,7 @@ ${lines.join("\n")}
         );
     };
 
-    let archivistDebugOperationOutput = "";
-    let archivistDebugOperationAppended = false;
-
-    const appendArchivistDebugOperation = () => {
-        if (
-            archivistDebugOperationAppended
-            || archivistDebugOperationOutput === ""
-        ) {
-            return;
-        }
-
-        archivistDebugOperationAppended = true;
-
-        const hasVisibleOutput =
-            text
-                .replace(/[\u200B-\u200D]+/g, "")
-                .trim() !== "";
-
-        if (!hasVisibleOutput) {
-            text = archivistDebugOperationOutput;
-            return;
-        }
-
-        text = `${
-            archivistDebugOperationOutput
-        }${
-            /^\s/.test(text)
-            ? ""
-            : " "
-        }${text}`;
-    };
-
     const appendRequestedArchivistStatus = () => {
-        appendArchivistDebugOperation();
-
         if (!IS.ARCHIVIST.statusRequested) {
             return;
         }
@@ -1697,6 +1680,74 @@ ${lines.join("\n")}
 
     // ==================== ARCHIVIST CONFIGURATION ====================
     const ARCHIVIST_CONFIG_KEY = "@ARCHIVIST_CONFIG";
+    const ARCHIVIST_DEBUG_KEY = "@ARCHIVIST_DEBUG";
+    const ARCHIVIST_DEBUG_TITLE = "DEBUG";
+    const ARCHIVIST_DEBUG_DESCRIPTION =
+        "> One raw Archivist Discovery operation per line.";
+
+    const findArchivistDebugCard = () => storyCards.find(card => (
+        card
+        && typeof card === "object"
+        && !Array.isArray(card)
+        && card.keys === ARCHIVIST_DEBUG_KEY
+    )) ?? null;
+
+    const ensureArchivistDebugCard = () => {
+        let card = findArchivistDebugCard();
+
+        if (!card) {
+            card = addStoryCard(
+                ARCHIVIST_DEBUG_KEY,
+                "",
+                "class",
+                ARCHIVIST_DEBUG_TITLE,
+                ARCHIVIST_DEBUG_DESCRIPTION,
+                { returnCard: true }
+            );
+        }
+
+        if (!card) return null;
+
+        card.keys = ARCHIVIST_DEBUG_KEY;
+        card.type = "class";
+        card.title = ARCHIVIST_DEBUG_TITLE;
+        card.entry = typeof card.entry === "string"
+            ? card.entry
+            : "";
+        card.description = ARCHIVIST_DEBUG_DESCRIPTION;
+
+        return card;
+    };
+
+    const appendArchivistDiscoveryDebugOperation = (
+        operation = {},
+        pending = {},
+        config = {}
+    ) => {
+        if (
+            !config.archiveDebug
+            || pending.mode !== "discovery"
+            || !operation.matched
+        ) {
+            return false;
+        }
+
+        const raw = cleanArchivistValue(
+            operation.raw ?? "",
+            2000
+        );
+        if (raw === "") return false;
+
+        const card = ensureArchivistDebugCard();
+        if (!card) return false;
+
+        card.entry = [
+            card.entry.trimEnd(),
+            raw
+        ].filter(Boolean).join("\n");
+
+        return true;
+    };
 
     const cleanArchivistList = (value = "") => {
         const source = Array.isArray(value) ? value : String(value).split(/[,\n]/);
@@ -1832,7 +1883,7 @@ ${lines.join("\n")}
                     [
                         "> Archivist Discovery creates valuable new Archive cards.",
                         "> Archivist Maintenance updates player-selected tracked Archive cards.",
-                        "> Debug mode keeps the raw parenthesized Archivist operation visible in the story output.",
+                        "> Debug mode logs raw parenthesized Discovery operations to the DEBUG card instead of the story output.",
                         "> Set Discovery strictness to Loose or Medium.",
                         "> Set Discovery scope to any subject type you want to discover, e.g. Species, Religion, Nation, Character, Magic System.",
                         "> Set Maximum facts per discovery to 1, 2, or 3.",
@@ -1956,6 +2007,10 @@ ${lines.join("\n")}
             archivistRejectPlaceholderKeys =
                 archiveRejectPlaceholderKeys;
 
+            if (archiveDebug) {
+                ensureArchivistDebugCard();
+            }
+
             card.type = "class";
             card.title =
                 "Configure \nArchivist";
@@ -1963,7 +2018,7 @@ ${lines.join("\n")}
             card.entry = [
                 "> Archivist Discovery creates valuable new Archive cards.",
                 "> Archivist Maintenance updates player-selected tracked Archive cards.",
-                "> Debug mode keeps the raw parenthesized Archivist operation visible in the story output.",
+                "> Debug mode logs raw parenthesized Discovery operations to the DEBUG card instead of the story output.",
                 "> Set Discovery strictness to Loose or Medium.",
                 "> Set Discovery scope to any subject type you want to discover, e.g. Species, Religion, Nation, Character, Magic System.",
                 "> Set Maximum facts per discovery to 1, 2, or 3.",
@@ -2020,7 +2075,7 @@ ${lines.join("\n")}
      * @property {boolean} auto - Is Auto-Cards enabled?
      * @property {boolean} archiveDiscovery - Is Archivist Discovery enabled?
      * @property {boolean} archiveMaintenance - Is tracked Archive maintenance enabled?
-     * @property {boolean} archiveDebug - Are raw Archivist operations visible in story output?
+     * @property {boolean} archiveDebug - Are raw Discovery operations logged to the DEBUG card?
      * @property {"Loose"|"Medium"} archiveDiscoveryStrictness - How readily Discovery creates Archive cards
      * @property {1|2|3} archiveMaximumDiscoveryFacts - Maximum coherent facts stored by one Discovery operation
      * @property {boolean} archiveRejectPlaceholderKeys - Are literal prompt-placeholder keys rejected?
@@ -3796,12 +3851,6 @@ Follow the format **perfectly**.
     }
 
     if (archivistMemoryOperation.matched) {
-        if (config.archiveDebug) {
-            archivistDebugOperationOutput =
-                archivistMemoryOperation.raw
-                ?? "";
-        }
-
         text =
             archivistMemoryOperation.rest
             || " ";
@@ -3828,6 +3877,12 @@ Follow the format **perfectly**.
                     history.length,
                     pending
                 );
+
+            appendArchivistDiscoveryDebugOperation(
+                archivistMemoryOperation,
+                pending,
+                config
+            );
 
             const diagnostic = {
                 mode:
