@@ -828,6 +828,24 @@ function InnerSelf(hook) {
         return fields;
     };
 
+    const splitArchivistAssignmentField = (
+        source = ""
+    ) => {
+        const separator = source.indexOf("=");
+
+        if (
+            separator <= 0
+            || source.slice(0, separator).includes("\n")
+        ) {
+            return null;
+        }
+
+        return [
+            source.slice(0, separator).trim(),
+            source.slice(separator + 1).trim()
+        ];
+    };
+
     const cleanArchivistFactValue = (
         value = "",
         limit = ARCHIVIST_MEMORY_VALUE_LIMIT
@@ -889,17 +907,17 @@ function InnerSelf(hook) {
                             fields[1]
                         );
                     const assignment =
-                        fields[2].match(
-                            /^([^=\n]+?)\s*=\s*([\s\S]+)$/
+                        splitArchivistAssignmentField(
+                            fields[2]
                         );
                     const key =
                         cleanArchivistMemoryKey(
-                            assignment?.[1]
+                            assignment?.[0]
                             ?? ""
                         );
                     const value =
                         cleanArchivistFactValue(
-                            assignment?.[2]
+                            assignment?.[1]
                             ?? "",
                             ARCHIVIST_MEMORY_VALUE_LIMIT
                         );
@@ -1228,7 +1246,9 @@ ${config.archiveScope.join("\n") || "(none)"}
 
 ## FIND CANDIDATES (REQUIRED)
 
-Find every CANDIDATE that is an explicitly named or titled subject in the supplied story context.
+Find every CANDIDATE whose exact name or title is explicitly present in the supplied story context.
+
+Use only that exact stated name or title. Never invent, complete, expand, reinterpret, embellish, or replace it.
 
 ## DISCARD EXISTING SUBJECTS (REQUIRED)
 
@@ -1238,20 +1258,41 @@ Before applying any other rule, compare every CANDIDATE against every subject in
 
 Immediately and permanently discard every CANDIDATE that already exists there or is a clear alias of an existing subject. Never qualify or output a discarded CANDIDATE.
 
-## QUALIFY REMAINING CANDIDATES (REQUIRED)
+## APPLY TYPE SCOPE (REQUIRED)
 
-Evaluate every remaining CANDIDATE against every RULE below.
+<ARCH_TYPES> is an exhaustive eligibility filter. It is not an instruction to assign every CANDIDATE a TYPE.
 
-Reject every CANDIDATE that breaks any rule. You may end up with no qualified CANDIDATE.
+Keep a CANDIDATE only if the subject itself is directly and naturally an instance of one exact item in <ARCH_TYPES>.
 
-To qualify, a CANDIDATE:
+If no item directly describes what the subject itself is, reject the CANDIDATE. Never force the closest TYPE.
 
-- must be naturally described by one item in <ARCH_TYPES>. Logical chains or associations are not allowed.
-- must be a distinct and persistent subject that remains identifiable beyond the current scene.
-- must not be generic scenery, an ordinary object, a temporary event, a temporary condition, or a flavor-only detail.
-- must have at least one significant and relevant fact that describes the CANDIDATE in the provided story context. Select one such fact while qualifying the CANDIDATE.
-- must be worth remembering for future continuity, world understanding, or the ongoing plot.
-- should not be rejected because of its lack of recurrence. A single sufficiently significant introduction may be enough.
+Associations, roles, membership, leadership, ownership, location, use, and logical chains do not qualify.
+
+## REQUIRE SIGNIFICANCE (REQUIRED)
+
+For each remaining CANDIDATE, select one FACT established by the supplied story context. Never invent, expand, enrich, rationalize, or speculate beyond what the context establishes.
+
+The CANDIDATE qualifies only if that FACT passes both tests:
+
+### WORLD SIGNIFICANCE
+
+The FACT must provide persistent, non-trivial information needed to meaningfully understand the CANDIDATE or the world.
+
+Mere existence, naming, generic description, incidental location, temporary state, or flavor is not significant.
+
+### STORY SIGNIFICANCE
+
+The FACT must already matter within the supplied story context.
+
+It must meaningfully affect or explain the ongoing plot, a character's goals or decisions, the stakes, a conflict, an important relationship, a world rule, or an established future interaction.
+
+A FACT does not become significant merely because it could possibly matter later.
+
+The CANDIDATE must also be a distinct and persistent subject that remains identifiable beyond the current scene.
+
+Do not reject a CANDIDATE solely for lacking recurrence. One sufficiently significant introduction may be enough.
+
+Reject every CANDIDATE that fails any requirement. You may end up with no qualified CANDIDATE.
 
 ## CHOOSE ONE CANDIDATE (REQUIRED)
 
@@ -1268,18 +1309,18 @@ If you have no qualified CANDIDATE, simply output (none) followed by the STORY C
 ## ONE QUALIFIED CANDIDATE (OPTION B)
 
 Use the following format:
-(TYPE | NAME | KEY = \`FACT\`)
+(TYPE|NAME|KEY=FACT)
 
 Inside the parentheses:
 
 - Replace TYPE with the item from ARCH_TYPES that describes the qualified CANDIDATE.
-- Then a space, then "|", then a space.
+- Then write "|".
 - Replace NAME with the qualified CANDIDATE's readable story name using normal spaces, never snake_case or underscores.
-- Then a space, then "|", then a space.
+- Then write "|".
 - Replace KEY with 1-3 descriptive lowercase snake_case words that describe the selected FACT.
-- Then a space, then "=", then a space, then "\`".
-- Replace FACT with the significant and relevant fact that qualified the CANDIDATE.
-- End the sentence with a period and backtick inside the parentheses; close with ".\`)".
+- Then write "=".
+- Replace FACT with the significant FACT that qualified the CANDIDATE.
+- End FACT with a period, then immediately close the parenthesis.
 
 TYPE, NAME, KEY and FACT must not be copied literally.
 
@@ -1296,30 +1337,35 @@ You must output exactly one short parenthetical task followed by the story conti
 
 ## SHORT TASK A: SELECT A USEFUL WORLD SUBJECT
 
-Examine the supplied story context for named or otherwise unambiguous world subjects.
+Examine the supplied story context for world subjects whose exact names or titles are explicitly present.
+
+Use only an exact stated name or title. Never invent, complete, expand, reinterpret, embellish, or replace it.
 
 For each candidate subject:
 
 1. Determine what the subject itself actually is.
 
-2. Assign the subject the closest reasonable WORLD_TYPE from this exhaustive allowed list:
+2. Apply this exhaustive WORLD_TYPE list as an eligibility filter:
    ${config.archiveScope.join(", ") || "(none)"}
 
-3. A direct category match is ideal, but a prominent, story-relevant association with an allowed WORLD_TYPE is sufficient.
+3. Keep the subject only if the subject itself is directly and naturally an instance of one exact WORLD_TYPE.
 
-4. Classify the selected subject itself using the closest useful WORLD_TYPE. Do not reject a valuable persistent subject merely because the fit is broad rather than exact.
+4. If no WORLD_TYPE directly describes what the subject itself is, reject it. Never force the closest WORLD_TYPE. Associations, roles, membership, leadership, ownership, location, use, and logical chains do not qualify.
 
-5. Accept a subject on its first meaningful appearance when it seems likely to matter again. Recurrence and exhaustive detail are not required.
+5. Select one established or strongly implied FACT. Never invent, expand, enrich, rationalize, or speculate beyond what the context supports.
 
-6. From the useful candidates, choose at most one subject worth remembering for persistent world continuity, world understanding, or future plot interaction.
+6. Keep the subject only if the FACT has both WORLD SIGNIFICANCE and STORY SIGNIFICANCE:
+   - WORLD SIGNIFICANCE: The FACT is persistent, non-trivial information needed to meaningfully understand the subject or world.
+   - STORY SIGNIFICANCE: The FACT already meaningfully affects or explains the ongoing plot, a character's goals or decisions, the stakes, a conflict, an important relationship, a world rule, or an established future interaction.
+
+7. From the qualifying candidates, choose at most one subject with the greatest lasting continuity value.
 
 Additional selection rules:
 
-- Prefer a useful operation over (none) whenever the context supports a persistent subject and fact.
-- Accept strongly implied persistent facts when the context makes them clear; do not require literal exposition.
-- Include notable objects, groups, places, settings, institutions, cultures, artifacts, rules, and recurring concepts when they fit the configured scope closely enough.
-- Ignore only clearly generic scenery, incidental names, temporary events, and flavor-only mentions.
-- Do not target existing Archive titles.
+- Accept strongly implied facts when the supplied story context makes them clear; do not require literal exposition.
+- Mere existence, naming, generic description, incidental location, temporary state, flavor, or possible future usefulness is not significant.
+- Do not reject a subject solely for lacking recurrence. One sufficiently significant introduction may be enough.
+- Compare every candidate against every existing Archive title below. Reject exact matches and clear aliases before qualifying candidates.
 - If no useful new subject can be identified without inventing unsupported information, choose (none).
 
 ## EXCLUDED SUBJECTS
@@ -1333,28 +1379,28 @@ Start your output immediately with exactly one of these forms:
 
 (none)
 
-(WORLD_TYPE | SUBJECT_NAME | ANY_KEY_NAME = \`One short objective world fact.\`)
+(WORLD_TYPE|SUBJECT_NAME|ANY_KEY_NAME=FACT)
 
 Inside the parentheses:
 
 - Copy the chosen WORLD_TYPE exactly as you selected it.
-- Then write one space, "|", and one space.
+- Then write "|".
 - SUBJECT_NAME must be the readable story name with normal spaces, never snake_case or underscores.
-- Then write one space, "|", and one space.
+- Then write "|".
 - ANY_KEY_NAME:
   - must contain 1-3 descriptive words.
   - may contain letters and underscores only.
   - use snake_case.
   - Choose a key appropriate to the selected fact and subject type.
   - Do not merely copy the subject type as the key.
-- Then write one space, "=", one space, and one backtick.
+- Then write "=".
 ${buildArchivistDiscoveryFactRule(config.archiveMaximumDiscoveryFacts, "SUBJECT_NAME", "established or strongly implied, persistent, objective world")}
 - Do not combine unrelated facts.
 - Do not store unsupported speculation, narration, dialogue, atmosphere, or temporary conditions.
-- End fact with a period inside the backticks.
-- Close the parenthesis immediately after the final backtick.
+- End FACT with a period.
+- Close the parenthesis immediately after that period.
 
-Never copy SUBJECT_NAME or ANY_KEY_NAME literally from these instructions.
+Never copy WORLD_TYPE, SUBJECT_NAME, ANY_KEY_NAME, or FACT literally from these instructions.
 
 ## STORY CONTINUATION
 
