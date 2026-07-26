@@ -1026,6 +1026,10 @@ function InnerSelf(hook) {
     const buildArchivistTitleIndex = () => {
         const output = [];
         const seen = new Set();
+        const excluded = new Set([
+            "Configure Inner Self",
+            "Configure Archivist"
+        ].map(archivistId));
 
         for (const card of storyCards) {
             if (
@@ -1043,6 +1047,7 @@ function InnerSelf(hook) {
             if (
                 title === ""
                 || id === ""
+                || excluded.has(id)
                 || seen.has(id)
             ) {
                 continue;
@@ -1196,66 +1201,98 @@ ${memories}
 
     const buildMediumArchivistMemoryTask = (config = {}) => `
 <SYSTEM>
-# ARCHIVIST: DISCOVERY
+# STRICT SUBJECT CANDIDATE SELECTION
 
-Silently select at most one new Archive subject established by the supplied story context. Do not output your reasoning.
+## CANDIDATE DEFINITIONS
 
-There is no discovery quota. Use (none) unless a candidate clearly qualifies.
+A POSSIBLE CANDIDATE is any explicitly named or titled subject found in the supplied story context.
 
-Allowed TYPE values — exhaustive, not examples:
+You must identify every POSSIBLE CANDIDATE before applying the rules.
 
-<ALLOWED_TYPE_VALUES>
-${config.archiveScope.join("\n") || "(none)"}
-</ALLOWED_TYPE_VALUES>
+You must apply the rules below in order to every POSSIBLE CANDIDATE that has not already been rejected.
 
-A candidate qualifies only if all of the following apply:
+Rejecting one POSSIBLE CANDIDATE must not stop the evaluation of any other POSSIBLE CANDIDATE.
 
-- It is a distinct, persistent subject rather than a temporary event, condition, or detail of the current scene.
-- It is explicitly named or titled in the story.
-- Use the story-given name. Never create or expand a subject name from a description.
-- The subject itself directly and naturally fits an allowed TYPE. Association with something of an allowed TYPE is not enough.
-- It is useful for future continuity, established world understanding, or an ongoing plot thread.
-- The context directly establishes at least one objective, persistent fact about it.
-- It is not already archived under the same title or a clear alias.
+## RULE ONE
 
-A first substantial introduction may qualify; recurrence is not required.
+A POSSIBLE CANDIDATE must not already exist in ARCH_EXISTING and must not be a clear alias of a subject in ARCH_EXISTING.
 
-Reject generic scenery, incidental names, ordinary objects, scene-bound encounters, temporary events or conditions, and flavor-only details.
+You must reject every POSSIBLE CANDIDATE that already exists in ARCH_EXISTING or refers to the same subject under a different name.
 
-Directly established relationships are allowed. Do not speculate or derive facts through logical chains.
-
-If several candidates qualify, choose the one with the greatest lasting continuity value.
-
-## ALREADY ARCHIVED — EXCLUDED FROM DISCOVERY
-
-Do not select these titles or clear aliases of the same subjects. This restriction applies only to Discovery, not to the story continuation.
-
-<EXISTING_ARCHIVE_TITLES>
+<ARCH_EXISTING>
 ${buildArchivistTitleIndex()}
-</EXISTING_ARCHIVE_TITLES>
+</ARCH_EXISTING>
 
-## OUTPUT FORMAT
+## RULE TWO
 
-Begin the response immediately with exactly one operation:
+A POSSIBLE CANDIDATE must be directly and naturally described by at least one item in ARCH_TYPES.
 
-(none)
+Mere association with an item in ARCH_TYPES must not qualify a POSSIBLE CANDIDATE.
 
-(TYPE | SUBJECT | key = \`fact.\`)
+You must reject every POSSIBLE CANDIDATE that does not fit any item in ARCH_TYPES.
 
-Inside the operation:
+For each POSSIBLE CANDIDATE that passes this rule, you must remember exactly one item from ARCH_TYPES as its CANDIDATE_TYPE.
 
-- TYPE is determined by SUBJECT. Use the single best-fitting, most specific allowed TYPE and copy its spelling exactly.
-- SUBJECT must use readable words and spaces, never snake_case or underscores.
-- key must contain 1–3 descriptive lowercase snake_case words.
-- key must describe the stored attribute or relationship rather than merely classify SUBJECT. TYPE-related words are allowed when they meaningfully describe the fact.
-${buildArchivistDiscoveryFactRule(config.archiveMaximumDiscoveryFacts)}
-- Do not combine unrelated facts.
-- End fact with a period inside the backticks.
-- TYPE, SUBJECT, key, and fact are placeholders and must not be copied literally.
+If more than one item fits, you must choose the single best-fitting item.
 
-After the closing parenthesis, write exactly one space and continue the story normally from ${config.player}'s second-person present-tense perspective.
+<ARCH_TYPES>
+${config.archiveScope.join("\n") || "(none)"}
+</ARCH_TYPES>
 
-Do not explain or mention the Archivist operation in the story continuation.
+## RULE THREE
+
+A POSSIBLE CANDIDATE must be a distinct and persistent subject.
+
+The POSSIBLE CANDIDATE must remain the same identifiable subject beyond the current scene.
+
+A POSSIBLE CANDIDATE must not be a temporary event, a temporary condition, or a detail that exists only within the current scene.
+
+## RULE FOUR
+
+A POSSIBLE CANDIDATE must not be generic scenery, an incidental name, an ordinary object, a scene-bound encounter, or a flavor-only detail.
+
+A persistent subject must not be rejected merely because it is introduced for the first time during the current scene or during a single encounter.
+
+## RULE FIVE
+
+The supplied story context must directly establish at least one objective and persistent fact about the POSSIBLE CANDIDATE.
+
+The fact must directly describe the POSSIBLE CANDIDATE or a directly established relationship involving it.
+
+The fact must not be speculation or a conclusion derived through a logical chain or mere association.
+
+## QUALIFICATION RESULT
+
+After every rule has been applied to every POSSIBLE CANDIDATE, a POSSIBLE CANDIDATE becomes a QUALIFIED CANDIDATE only if it passed every rule and was not rejected by any rule.
+
+Every POSSIBLE CANDIDATE rejected by any rule must remain excluded from the QUALIFIED CANDIDATES.
+
+# STRICT OUTPUT FORMAT
+
+You must output exactly one parenthetical task followed by the story continuation.
+
+## CANDIDATE OUTPUT
+
+You must output (none) only if no QUALIFIED CANDIDATE remains after all POSSIBLE CANDIDATES have been evaluated.
+
+If you have more than one QUALIFIED CANDIDATE, you must choose the one with the greatest lasting continuity value.
+
+If you have at least one QUALIFIED CANDIDATE, you must use this format:
+
+(CANDIDATE_TYPE | CANDIDATE_NAME | ARCH_KEY = \`ARCH_FACT\`)
+
+Inside the parentheses:
+
+- CANDIDATE_TYPE, CANDIDATE_NAME, ARCH_KEY, and ARCH_FACT must not be copied literally.
+- CANDIDATE_TYPE must be the item from ARCH_TYPES remembered for the chosen QUALIFIED CANDIDATE.
+- CANDIDATE_NAME must be the story-given name of the chosen QUALIFIED CANDIDATE. You must never create or expand a subject name from a description.
+- ARCH_KEY must consist of 1–3 descriptive lowercase snake_case words that describe ARCH_FACT.
+- ARCH_FACT must be one directly established objective fact about the chosen QUALIFIED CANDIDATE that does not come from a logical chain or mere association.
+
+## STORY CONTINUATION
+
+- After the closing parenthesis, write one space and then continue the story.
+- The story continues where it previously left off, with many lines or sentences of new prose.
 </SYSTEM>`.trim();
 
     const buildLooseArchivistMemoryTask = (config = {}) => `
