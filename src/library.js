@@ -1201,98 +1201,43 @@ ${memories}
 
     const buildMediumArchivistMemoryTask = (config = {}) => `
 <SYSTEM>
-# STRICT SUBJECT CANDIDATE SELECTION
+Silently examine every explicitly named or uniquely titled subject in the supplied story context. You must apply these filters in order to every subject; rejecting one must not end the search.
 
-## CANDIDATE DEFINITIONS
-
-A POSSIBLE CANDIDATE is any explicitly named or titled subject found in the supplied story context.
-
-You must identify every POSSIBLE CANDIDATE before applying the rules.
-
-You must apply the rules below in order to every POSSIBLE CANDIDATE that has not already been rejected.
-
-Rejecting one POSSIBLE CANDIDATE must not stop the evaluation of any other POSSIBLE CANDIDATE.
-
-## RULE ONE
-
-A POSSIBLE CANDIDATE must not already exist in ARCH_EXISTING and must not be a clear alias of a subject in ARCH_EXISTING.
-
-You must reject every POSSIBLE CANDIDATE that already exists in ARCH_EXISTING or refers to the same subject under a different name.
+1. You must reject any subject already in ARCH_EXISTING.
 
 <ARCH_EXISTING>
 ${buildArchivistTitleIndex()}
 </ARCH_EXISTING>
 
-## RULE TWO
-
-A POSSIBLE CANDIDATE must be directly and naturally described by at least one item in ARCH_TYPES.
-
-Mere association with an item in ARCH_TYPES must not qualify a POSSIBLE CANDIDATE.
-
-You must reject every POSSIBLE CANDIDATE that does not fit any item in ARCH_TYPES.
-
-For each POSSIBLE CANDIDATE that passes this rule, you must remember exactly one item from ARCH_TYPES as its CANDIDATE_TYPE.
-
-If more than one item fits, you must choose the single best-fitting item.
+2. The subject itself must directly and naturally fit a TYPE from the exhaustive ARCH_TYPES list. A logical chain or mere association with a TYPE is not enough.
 
 <ARCH_TYPES>
 ${config.archiveScope.join("\n") || "(none)"}
 </ARCH_TYPES>
 
-## RULE THREE
+3. The subject must be distinct and persistent beyond the current scene, and the context must directly establish at least one objective, persistent fact about it.
 
-A POSSIBLE CANDIDATE must be a distinct and persistent subject.
+From the remaining subjects, choose at most one worth remembering for future continuity, world understanding, or the ongoing plot. Judge significance from the whole narrative context, including narrative emphasis, meaningful connections and implications, and likely future relevance. Being named, fitting a TYPE, or having one fact does not alone make a subject worth its own card.
 
-The POSSIBLE CANDIDATE must remain the same identifiable subject beyond the current scene.
+A first substantial introduction is enough; recurrence is not required. Ignore generic scenery, incidental names, temporary events or conditions, ordinary objects, and flavor-only or background mentions.
 
-A POSSIBLE CANDIDATE must not be a temporary event, a temporary condition, or a detail that exists only within the current scene.
+If several subjects are worth remembering, choose the one with the greatest lasting continuity value. If none is worthwhile, use (none).
 
-## RULE FOUR
+Begin immediately with exactly one operation:
 
-A POSSIBLE CANDIDATE must not be generic scenery, an incidental name, an ordinary object, a scene-bound encounter, or a flavor-only detail.
+(none)
 
-A persistent subject must not be rejected merely because it is introduced for the first time during the current scene or during a single encounter.
+(TYPE | SUBJECT | KEY = \`FACT\`)
 
-## RULE FIVE
+The second form must have exactly three fields and two "|" characters:
 
-The supplied story context must directly establish at least one objective and persistent fact about the POSSIBLE CANDIDATE.
+- TYPE copies one value from ARCH_TYPES exactly.
+- SUBJECT uses the story-given readable name or title with normal spaces; never invent or expand it.
+- key uses 1–3 descriptive lowercase snake_case words describing the fact.
+- fact is one coherent, directly established, objective and persistent fact about SUBJECT, not speculation or a logical derivation.
+- TYPE, SUBJECT, KEY and FACT are placeholders. You must replace them.
 
-The fact must directly describe the POSSIBLE CANDIDATE or a directly established relationship involving it.
-
-The fact must not be speculation or a conclusion derived through a logical chain or mere association.
-
-## QUALIFICATION RESULT
-
-After every rule has been applied to every POSSIBLE CANDIDATE, a POSSIBLE CANDIDATE becomes a QUALIFIED CANDIDATE only if it passed every rule and was not rejected by any rule.
-
-Every POSSIBLE CANDIDATE rejected by any rule must remain excluded from the QUALIFIED CANDIDATES.
-
-# STRICT OUTPUT FORMAT
-
-You must output exactly one parenthetical task followed by the story continuation.
-
-## CANDIDATE OUTPUT
-
-You must output (none) only if no QUALIFIED CANDIDATE remains after all POSSIBLE CANDIDATES have been evaluated.
-
-If you have more than one QUALIFIED CANDIDATE, you must choose the one with the greatest lasting continuity value.
-
-If you have at least one QUALIFIED CANDIDATE, you must use this format:
-
-(CANDIDATE_TYPE | CANDIDATE_NAME | ARCH_KEY = \`ARCH_FACT\`)
-
-Inside the parentheses:
-
-- CANDIDATE_TYPE, CANDIDATE_NAME, ARCH_KEY, and ARCH_FACT must not be copied literally.
-- CANDIDATE_TYPE must be the item from ARCH_TYPES remembered for the chosen QUALIFIED CANDIDATE.
-- CANDIDATE_NAME must be the story-given name of the chosen QUALIFIED CANDIDATE. You must never create or expand a subject name from a description.
-- ARCH_KEY must consist of 1–3 descriptive lowercase snake_case words that describe ARCH_FACT.
-- ARCH_FACT must be one directly established objective fact about the chosen QUALIFIED CANDIDATE that does not come from a logical chain or mere association.
-
-## STORY CONTINUATION
-
-- After the closing parenthesis, write one space and then continue the story.
-- The story continues where it previously left off, with many lines or sentences of new prose.
+After the closing parenthesis, write exactly one space and continue the story normally. Do not mention the operation. The story continuation must occupy most of the response.
 </SYSTEM>`.trim();
 
     const buildLooseArchivistMemoryTask = (config = {}) => `
