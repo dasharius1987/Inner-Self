@@ -1234,7 +1234,18 @@ ${memories}
 <SYSTEM>
 # CANDIDATE SELECTION (REQUIRED)
 
-## VARIABLES (REQUIRED)
+Only a subject that satisfies every rule below is a CANDIDATE. Do not first collect a broader list of names or subjects.
+
+A CANDIDATE:
+- is a new subject not represented by any entry in <ARCH_EXISTING>. The same subject with a leading article, shortened or expanded name, title, alias, or clearly equivalent wording is already represented and is not a CANDIDATE.
+- has one exact, continuous name or title explicitly present in the supplied story context. Never invent, combine, complete, expand, embellish, reinterpret, or replace it.
+- is itself directly and naturally an instance of one item in <ARCH_TYPES>. If no listed TYPE directly states what the subject is, it is not a CANDIDATE. Never use the closest TYPE or qualify a subject through association, role, membership, leadership, ownership, location, use, or a logical chain.
+- is a distinct and persistent subject that remains identifiable beyond the current scene, not generic scenery, an ordinary object, a temporary event, a temporary condition, or a flavor-only detail.
+- has at least one FACT established by the supplied story context. Never invent, expand, enrich, rationalize, or speculate beyond what the context establishes.
+- has a FACT that is both persistently important for understanding the subject or world and already important for understanding the ongoing plot, goals, decisions, stakes, conflict, an important relationship, a world rule, or an established future interaction. Mere existence, naming, generic description, incidental location, temporary state, flavor, or possible future relevance is insufficient.
+- is worth remembering for lasting continuity. Lack of recurrence alone does not disqualify one sufficiently significant introduction.
+
+Consider the complete supplied story context. Of all subjects satisfying every rule, only the one with the greatest lasting continuity value is the CANDIDATE.
 
 <ARCH_EXISTING>
 ${buildArchivistTitleIndex()}
@@ -1244,82 +1255,28 @@ ${buildArchivistTitleIndex()}
 ${config.archiveScope.join("\n") || "(none)"}
 </ARCH_TYPES>
 
-## FIND CANDIDATES (REQUIRED)
-
-Find every CANDIDATE whose exact name or title is explicitly present in the supplied story context.
-
-Use only that exact stated name or title. Never invent, complete, expand, reinterpret, embellish, or replace it.
-
-## DISCARD EXISTING SUBJECTS (REQUIRED)
-
-<ARCH_EXISTING> is an exclusion list. Every line names a subject that is unavailable for Discovery.
-
-Before applying any other rule, compare every CANDIDATE against every subject in <ARCH_EXISTING>.
-
-Immediately and permanently discard every CANDIDATE that already exists there or is a clear alias of an existing subject. Never qualify or output a discarded CANDIDATE.
-
-## APPLY TYPE SCOPE (REQUIRED)
-
-<ARCH_TYPES> is an exhaustive eligibility filter. It is not an instruction to assign every CANDIDATE a TYPE.
-
-Keep a CANDIDATE only if the subject itself is directly and naturally an instance of one exact item in <ARCH_TYPES>.
-
-If no item directly describes what the subject itself is, reject the CANDIDATE. Never force the closest TYPE.
-
-Associations, roles, membership, leadership, ownership, location, use, and logical chains do not qualify.
-
-## REQUIRE SIGNIFICANCE (REQUIRED)
-
-For each remaining CANDIDATE, select one FACT established by the supplied story context. Never invent, expand, enrich, rationalize, or speculate beyond what the context establishes.
-
-The CANDIDATE qualifies only if that FACT passes both tests:
-
-### WORLD SIGNIFICANCE
-
-The FACT must provide persistent, non-trivial information needed to meaningfully understand the CANDIDATE or the world.
-
-Mere existence, naming, generic description, incidental location, temporary state, or flavor is not significant.
-
-### STORY SIGNIFICANCE
-
-The FACT must already matter within the supplied story context.
-
-It must meaningfully affect or explain the ongoing plot, a character's goals or decisions, the stakes, a conflict, an important relationship, a world rule, or an established future interaction.
-
-A FACT does not become significant merely because it could possibly matter later.
-
-The CANDIDATE must also be a distinct and persistent subject that remains identifiable beyond the current scene.
-
-Do not reject a CANDIDATE solely for lacking recurrence. One sufficiently significant introduction may be enough.
-
-Reject every CANDIDATE that fails any requirement. You may end up with no qualified CANDIDATE.
-
-## CHOOSE ONE CANDIDATE (REQUIRED)
-
-If more than one CANDIDATE qualifies, discard every qualified CANDIDATE except the one with the greatest lasting continuity value.
-
 # STRICT OUTPUT FORMAT (REQUIRED)
 
 You must output exactly one parenthetical task followed by the story continuation.
 
-## NO QUALIFIED CANDIDATE (OPTION A)
+## NO CANDIDATE (OPTION A)
 
-If you have no qualified CANDIDATE, simply output (none) followed by the STORY CONTINUATION.
+If you have no CANDIDATE, simply output (none) followed by the STORY CONTINUATION.
 
-## ONE QUALIFIED CANDIDATE (OPTION B)
+## ONE CANDIDATE (OPTION B)
 
 Use the following format:
 (TYPE|NAME|KEY=FACT)
 
 Inside the parentheses:
 
-- Replace TYPE with the item from ARCH_TYPES that describes the qualified CANDIDATE.
+- Replace TYPE with the item from ARCH_TYPES that describes the CANDIDATE.
 - Then write "|".
-- Replace NAME with the qualified CANDIDATE's readable story name using normal spaces, never snake_case or underscores.
+- Replace NAME with the CANDIDATE's readable story name using normal spaces, never snake_case or underscores.
 - Then write "|".
 - Replace KEY with 1-3 descriptive lowercase snake_case words that describe the selected FACT.
 - Then write "=".
-- Replace FACT with the significant FACT that qualified the CANDIDATE.
+- Replace FACT with the significant FACT of the CANDIDATE.
 - End FACT with a period, then immediately close the parenthesis.
 
 TYPE, NAME, KEY and FACT must not be copied literally.
