@@ -48,7 +48,7 @@ globalThis.MainSettings = (class MainSettings {
     // (true or false)
     ,
     // Which subject types may Archivist Discovery consider?
-    ARCHIVIST_DISCOVERY_SCOPE: "Locations, settlements, factions, cultures, institutions, artifacts, deities"
+    ARCHIVIST_DISCOVERY_SCOPE: "Location, Settlement, Faction, Culture, Institution, Artifact, Deity"
     // (comma-separated exhaustive discovery types)
     ,
     // How readily should Archivist Discovery create cards?
@@ -291,7 +291,7 @@ function InnerSelf(hook) {
     // (true or false)
     ,
     // Which subject types may Archivist Discovery consider?
-    ARCHIVIST_DISCOVERY_SCOPE: "Locations, settlements, factions, cultures, institutions, artifacts, deities"
+    ARCHIVIST_DISCOVERY_SCOPE: "Location, Settlement, Faction, Culture, Institution, Artifact, Deity"
     // (comma-separated exhaustive discovery types)
     ,
     // How readily should Archivist Discovery create cards?
@@ -1201,43 +1201,71 @@ ${memories}
 
     const buildMediumArchivistMemoryTask = (config = {}) => `
 <SYSTEM>
-Silently examine every explicitly named or uniquely titled subject in the supplied story context. You must apply these filters in order to every subject; rejecting one must not end the search.
+# CANDIDATE SELECTION (REQUIRED)
 
-1. You must reject any subject already in ARCH_EXISTING.
+Evaluate the story context for CANDIDATES that are explicitly named or titled subjects found in the supplied story context.
+
+You must evaluate every CANDIDATE against every RULE below to qualify them for further usage.
+
+Reject every CANDIDATE that breaks any rule. You may end up with no qualified CANDIDATE.
+
+## VARIABLES (REQUIRED)
 
 <ARCH_EXISTING>
 ${buildArchivistTitleIndex()}
 </ARCH_EXISTING>
 
-2. The subject itself must directly and naturally fit a TYPE from the exhaustive ARCH_TYPES list. A logical chain or mere association with a TYPE is not enough.
-
 <ARCH_TYPES>
 ${config.archiveScope.join("\n") || "(none)"}
 </ARCH_TYPES>
 
-3. The subject must be distinct and persistent beyond the current scene, and the context must directly establish at least one objective, persistent fact about it.
+## RULES (REQUIRED)
 
-From the remaining subjects, choose at most one worth remembering for future continuity, world understanding, or the ongoing plot. Judge significance from the whole narrative context, including narrative emphasis, meaningful connections and implications, and likely future relevance. Being named, fitting a TYPE, or having one fact does not alone make a subject worth its own card.
+To qualify, a CANDIDATE:
 
-A first substantial introduction is enough; recurrence is not required. Ignore generic scenery, incidental names, temporary events or conditions, ordinary objects, and flavor-only or background mentions.
+- must not already exist in <ARCH_EXISTING> and must not be a clear alias of an existing subject.
+- must be naturally described by one item in <ARCH_TYPES>. Logical chains or associations are not allowed.
+- must be a distinct and persistent subject that remains identifiable beyond the current scene.
+- must not be generic scenery, an ordinary object, a temporary event, a temporary condition, or a flavor-only detail.
+- must have at least one significant and relevant fact that describes the CANDIDATE in the provided story context.
+- must be worth remembering for future continuity, world understanding, or the ongoing plot.
+- should not be rejected because of its lack of recurrence. A single sufficiently significant introduction may be enough.
 
-If several subjects are worth remembering, choose the one with the greatest lasting continuity value. If none is worthwhile, use (none).
+# STRICT OUTPUT FORMAT (REQUIRED)
 
-Begin immediately with exactly one operation:
+You must output exactly one parenthetical task followed by the story continuation.
 
-(none)
+## NO QUALIFIED CANDIDATE (OPTION A)
 
-(TYPE | SUBJECT | KEY = \`FACT\`)
+If you have no qualified CANDIDATE, simply output (none) followed by the STORY CONTINUATION.
 
-The second form must have exactly three fields and two "|" characters:
+## ONE OR MORE QUALIFIED CANDIDATES (OPTION B)
 
-- TYPE copies one value from ARCH_TYPES exactly.
-- SUBJECT uses the story-given readable name or title with normal spaces; never invent or expand it.
-- key uses 1–3 descriptive lowercase snake_case words describing the fact.
-- fact is one coherent, directly established, objective and persistent fact about SUBJECT, not speculation or a logical derivation.
-- TYPE, SUBJECT, KEY and FACT are placeholders. You must replace them.
+If you have more than one qualified CANDIDATE, you must choose the one with the greatest lasting continuity value.
+Now, with one qualified CANDIDATE left, use the following format:
+(TYPE | NAME | KEY = \`FACT\`)
 
-After the closing parenthesis, write exactly one space and continue the story normally. Do not mention the operation. The story continuation must occupy most of the response.
+Inside the parentheses:
+
+- TYPE must naturally describe the chosen qualified CANDIDATE with an item from ARCH_TYPES.
+- Then a space, then "|", then a space.
+- NAME must be the readable story name of the chosen qualified CANDIDATE with normal spaces, never snake_case or underscores.
+- Then a space, then "|", then a space.
+- KEY must consist of 1-3 descriptive lowercase snake_case words that describe the FACT about the chosen qualified CANDIDATE.
+- Then a space, then "=", then a space, then "\`".
+- FACT must be one coherent, significant and relevant fact that describes the CANDIDATE in the provided story context.
+- End the sentence with a period and backtick inside the parentheses; close with ".\`)".
+
+TYPE, NAME, KEY and FACT must not be copied literally.
+
+## STORY CONTINUATION (REQUIRED)
+
+- After the closing parenthesis, add a space.
+- Continue the story as if this entire System entry had not existed.
+
+## EXACT SHAPE
+
+(Location | Deepwood | location_description = \`Deepwood is a vast forest known for its natural balance.\`) Lyra presses her body against the tree and looks at...
 </SYSTEM>`.trim();
 
     const buildLooseArchivistMemoryTask = (config = {}) => `
@@ -1316,7 +1344,7 @@ Never copy SUBJECT_NAME or ANY_KEY_NAME literally from these instructions.
 
 ## EXACT SHAPE
 
-(Locations | Example Subject | example_key = \`One short objective world fact.\`) Story continues from ${config.player}'s second-person perspective...
+(Location | Example Subject | example_key = \`One short objective world fact.\`) Story continues from ${config.player}'s second-person perspective...
 </SYSTEM>`.trim();
 
     const buildArchivistMemoryTask = (config = {}) => (
@@ -1806,7 +1834,7 @@ ${lines.join("\n")}
                         "> Archivist Maintenance updates player-selected tracked Archive cards.",
                         "> Debug mode keeps the raw parenthesized Archivist operation visible in the story output.",
                         "> Set Discovery strictness to Loose or Medium.",
-                        "> Set Discovery scope to any subject types you want to discover, e.g. Species, Religions, Nations, Characters, Magic Systems.",
+                        "> Set Discovery scope to any subject type you want to discover, e.g. Species, Religion, Nation, Character, Magic System.",
                         "> Set Maximum facts per discovery to 1, 2, or 3.",
                         `> Enable Discovery: ${fallback.archiveDiscovery}`,
                         `> Enable Maintenance: ${fallback.archiveMaintenance}`,
@@ -1937,7 +1965,7 @@ ${lines.join("\n")}
                 "> Archivist Maintenance updates player-selected tracked Archive cards.",
                 "> Debug mode keeps the raw parenthesized Archivist operation visible in the story output.",
                 "> Set Discovery strictness to Loose or Medium.",
-                "> Set Discovery scope to any subject types you want to discover, e.g. Species, Religions, Nations, Characters, Magic Systems.",
+                "> Set Discovery scope to any subject type you want to discover, e.g. Species, Religion, Nation, Character, Magic System.",
                 "> Set Maximum facts per discovery to 1, 2, or 3.",
                 `> Enable Discovery: ${archiveDiscovery}`,
                 `> Enable Maintenance: ${archiveMaintenance}`,
