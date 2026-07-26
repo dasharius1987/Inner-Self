@@ -1050,7 +1050,7 @@ function InnerSelf(hook) {
         return result;
     };
 
-    const buildArchivistTitleIndex = () => {
+    const buildArchivistTitleIndex = (separator = "\n") => {
         const output = [];
         const seen = new Set();
         const excluded = new Set([
@@ -1089,7 +1089,7 @@ function InnerSelf(hook) {
             if (500 <= output.length) break;
         }
 
-        return output.length ? output.join("\n") : "(none)";
+        return output.length ? output.join(separator) : "(none)";
     };
 
     const findTrackedArchivistTarget = (config = {}, source = text) => {
@@ -1230,30 +1230,64 @@ ${memories}
         return `- fact must state ${amount} coherent, ${description} ${noun} about ${subject}.`;
     };
 
-    const buildMediumArchivistMemoryTask = (config = {}) => `
+    const buildArchivistRecentStory = (
+        source = "",
+        maximumCharacters = 2000
+    ) => {
+        if (
+            typeof source !== "string"
+            || !Number.isInteger(maximumCharacters)
+            || maximumCharacters < 1
+        ) {
+            return "(none)";
+        }
+
+        const match = source.match(
+            /(?:^|\n)\s*Recent\s*Story\s*:\s*([\s\S]*?)(?=\s*\[\s*Author's\s*note\s*:|$)/i
+        );
+        const recentStory = match?.[1]?.trim() ?? "";
+
+        return recentStory === ""
+            ? "(none)"
+            : recentStory.slice(-maximumCharacters).trimStart();
+    };
+
+    const buildMediumArchivistMemoryTask = (
+        config = {},
+        source = text
+    ) => {
+        const existingTitles =
+            buildArchivistTitleIndex(", ");
+        const existingRule = existingTitles === "(none)"
+            ? "- is a new subject. No subjects are already represented."
+            : `- is a new subject that is not any of these already represented subjects: ${existingTitles}. A leading article, shortened or expanded name, title, alias, or clearly equivalent wording does not make an already represented subject new.`;
+        const archiveTypes =
+            config.archiveScope.join(", ") || "(none)";
+        const recentStory =
+            buildArchivistRecentStory(source);
+
+        return `
 <SYSTEM>
 # CANDIDATE SELECTION (REQUIRED)
 
 Only a subject that satisfies every rule below is a CANDIDATE. Do not first collect a broader list of names or subjects.
 
+For CANDIDATE selection, <ARCH_RECENT> is the only permitted evidence source. Text outside <ARCH_RECENT> may be used for continuing the story, but must not provide a CANDIDATE name or FACT.
+
 A CANDIDATE:
-- is a new subject not represented by any entry in <ARCH_EXISTING>. The same subject with a leading article, shortened or expanded name, title, alias, or clearly equivalent wording is already represented and is not a CANDIDATE.
-- has one exact, continuous name or title explicitly present in the supplied story context. Never invent, combine, complete, expand, embellish, reinterpret, or replace it.
-- is itself directly and naturally an instance of one item in <ARCH_TYPES>. If no listed TYPE directly states what the subject is, it is not a CANDIDATE. Never use the closest TYPE or qualify a subject through association, role, membership, leadership, ownership, location, use, or a logical chain.
+${existingRule}
+- has one exact, continuous name or title explicitly present in <ARCH_RECENT>. Never invent, combine, complete, expand, embellish, reinterpret, or replace it.
+- is itself directly and naturally one of the following types: ${archiveTypes}. If none of these types directly states what the subject itself is, it is not a CANDIDATE. Never use the closest type or qualify a subject through association, role, membership, leadership, ownership, location, use, or a logical chain.
 - is a distinct and persistent subject that remains identifiable beyond the current scene, not generic scenery, an ordinary object, a temporary event, a temporary condition, or a flavor-only detail.
-- has at least one FACT established by the supplied story context. Never invent, expand, enrich, rationalize, or speculate beyond what the context establishes.
+- has at least one FACT established by <ARCH_RECENT>. Never invent, expand, enrich, rationalize, or speculate beyond what <ARCH_RECENT> establishes.
 - has a FACT that is both persistently important for understanding the subject or world and already important for understanding the ongoing plot, goals, decisions, stakes, conflict, an important relationship, a world rule, or an established future interaction. Mere existence, naming, generic description, incidental location, temporary state, flavor, or possible future relevance is insufficient.
 - is worth remembering for lasting continuity. Lack of recurrence alone does not disqualify one sufficiently significant introduction.
 
-Consider the complete supplied story context. Of all subjects satisfying every rule, only the one with the greatest lasting continuity value is the CANDIDATE.
+Within <ARCH_RECENT>, of all subjects satisfying every rule, only the one with the greatest lasting continuity value is the CANDIDATE.
 
-<ARCH_EXISTING>
-${buildArchivistTitleIndex()}
-</ARCH_EXISTING>
-
-<ARCH_TYPES>
-${config.archiveScope.join("\n") || "(none)"}
-</ARCH_TYPES>
+<ARCH_RECENT>
+${recentStory}
+</ARCH_RECENT>
 
 # STRICT OUTPUT FORMAT (REQUIRED)
 
@@ -1270,7 +1304,7 @@ Use the following format:
 
 Inside the parentheses:
 
-- Replace TYPE with the item from ARCH_TYPES that describes the CANDIDATE.
+- Replace TYPE with the exact type by which the CANDIDATE qualified.
 - Then write "|".
 - Replace NAME with the CANDIDATE's readable story name using normal spaces, never snake_case or underscores.
 - Then write "|".
@@ -1286,6 +1320,7 @@ TYPE, NAME, KEY and FACT must not be copied literally.
 - After the closing parenthesis, add a space.
 - Continue the story as if this entire System entry had not existed.
 </SYSTEM>`.trim();
+    };
 
     const buildLooseArchivistMemoryTask = (config = {}) => `
 <SYSTEM>
@@ -1367,10 +1402,16 @@ Never copy WORLD_TYPE, SUBJECT_NAME, ANY_KEY_NAME, or FACT literally from these 
 - The story continuation must occupy most of the response.
 </SYSTEM>`.trim();
 
-    const buildArchivistMemoryTask = (config = {}) => (
+    const buildArchivistMemoryTask = (
+        config = {},
+        source = text
+    ) => (
         config.archiveDiscoveryStrictness === "Loose"
         ? buildLooseArchivistMemoryTask(config)
-        : buildMediumArchivistMemoryTask(config)
+        : buildMediumArchivistMemoryTask(
+            config,
+            source
+        )
     );
 
     /**
@@ -1475,7 +1516,8 @@ Never copy WORLD_TYPE, SUBJECT_NAME, ANY_KEY_NAME, or FACT literally from these 
                 target
             )
             : buildArchivistMemoryTask(
-                config
+                config,
+                text
             );
     };
 
