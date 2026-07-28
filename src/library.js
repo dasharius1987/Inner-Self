@@ -53,11 +53,7 @@ globalThis.MainSettings = (class MainSettings {
     ,
     // How readily should Archivist Discovery create cards?
     ARCHIVIST_DISCOVERY_STRICTNESS: "Medium"
-    // ("Loose" or "Medium")
-    ,
-    // How many coherent facts may one Archivist Discovery operation store at most?
-    ARCHIVIST_MAXIMUM_FACTS_PER_DISCOVERY: 1
-    // (1, 2, or 3)
+    // ("Medium"; unsupported values fall back to "Medium")
     ,
     // Is the player character's first name known in advance? Ignore this setting if unsure
     PREDETERMINED_PLAYER_CHARACTER_NAME: ""
@@ -296,11 +292,7 @@ function InnerSelf(hook) {
     ,
     // How readily should Archivist Discovery create cards?
     ARCHIVIST_DISCOVERY_STRICTNESS: "Medium"
-    // ("Loose" or "Medium")
-    ,
-    // How many coherent facts may one Archivist Discovery operation store at most?
-    ARCHIVIST_MAXIMUM_FACTS_PER_DISCOVERY: 1
-    // (1, 2, or 3)
+    // ("Medium"; unsupported values fall back to "Medium")
     ,
     // Is the player character's first name known in advance? Ignore this setting if unsure
     PREDETERMINED_PLAYER_CHARACTER_NAME: ""
@@ -422,6 +414,7 @@ function InnerSelf(hook) {
             operation: null,
             failures: [],
             statusRequested: false,
+            contextDumpRequested: false,
             lastTurn: -1,
             lastScanTurn: -1,
             scheduleHash: "",
@@ -509,7 +502,6 @@ function InnerSelf(hook) {
     const ARCHIVIST_MEMORY_KEY_LIMIT = 80;
     const ARCHIVIST_MEMORY_VALUE_LIMIT = 500;
     const ARCHIVIST_MEMORY_LIMIT_PER_CARD = 30;
-    const ARCHIVIST_DISCOVERY_FACT_LIMITS = Object.freeze([1, 2, 3]);
     const ARCHIVIST_FAILURE_HISTORY_LIMIT = 10;
     const ARCHIVIST_RESERVED_MEMORY_KEYS = new Set([
         "any_key_name", "memory_key", "key", "new_key", "example_key",
@@ -582,28 +574,6 @@ function InnerSelf(hook) {
             archivistRejectPlaceholderKeys
             && ARCHIVIST_RESERVED_MEMORY_KEYS.has(clean)
         ) ? "" : clean;
-    };
-
-    const cleanArchivistMaximumDiscoveryFacts = (
-        value = 1,
-        fallback = 1
-    ) => {
-        const parsed = Number(value);
-        const parsedFallback = Number(fallback);
-
-        if (
-            ARCHIVIST_DISCOVERY_FACT_LIMITS.includes(
-                parsed
-            )
-        ) {
-            return parsed;
-        }
-
-        return ARCHIVIST_DISCOVERY_FACT_LIMITS.includes(
-            parsedFallback
-        )
-            ? parsedFallback
-            : 1;
     };
 
     const readArchivistMetadata = (card = {}) => {
@@ -1068,7 +1038,10 @@ function InnerSelf(hook) {
                 continue;
             }
 
-            if (card.keys === ARCHIVIST_DEBUG_KEY) {
+            if (
+                card.keys === ARCHIVIST_DEBUG_KEY
+                || card.keys === ARCHIVIST_CONTEXT_DUMP_KEY
+            ) {
                 continue;
             }
 
@@ -1209,52 +1182,8 @@ ${memories}
         );
     };
 
-    const buildArchivistDiscoveryFactRule = (
-        maximumFacts = 1,
-        subject = "SUBJECT",
-        description = "directly established, persistent"
-    ) => {
-        maximumFacts =
-            cleanArchivistMaximumDiscoveryFacts(
-                maximumFacts
-            );
-        const amount = maximumFacts === 1
-            ? "one"
-            : maximumFacts === 2
-            ? "one or two"
-            : "at least one but up to three";
-        const noun = maximumFacts === 1
-            ? "fact"
-            : "facts";
-
-        return `- fact must state ${amount} coherent, ${description} ${noun} about ${subject}.`;
-    };
-
-    const buildArchivistRecentStory = (
-        source = "",
-        maximumCharacters = 2000
-    ) => {
-        if (
-            typeof source !== "string"
-            || !Number.isInteger(maximumCharacters)
-            || maximumCharacters < 1
-        ) {
-            return "(none)";
-        }
-
-        const match = source.match(
-            /(?:^|\n)\s*Recent\s*Story\s*:\s*([\s\S]*?)(?=\s*\[\s*Author's\s*note\s*:|$)/i
-        );
-        const recentStory = match?.[1]?.trim() ?? "";
-
-        return recentStory === ""
-            ? "(none)"
-            : recentStory.slice(-maximumCharacters).trimStart();
-    };
-
     const buildMediumArchivistMemoryTask = (
-        config = {},
-        source = text
+        config = {}
     ) => {
         const existingTitles =
             buildArchivistTitleIndex(", ");
@@ -1263,8 +1192,6 @@ ${memories}
             : `- is a new subject that is not any of these already represented subjects: ${existingTitles}. A leading article, shortened or expanded name, title, alias, or clearly equivalent wording does not make an already represented subject new.`;
         const archiveTypes =
             config.archiveScope.join(", ") || "(none)";
-        const recentStory =
-            buildArchivistRecentStory(source);
 
         return `
 <SYSTEM>
@@ -1272,24 +1199,21 @@ ${memories}
 
 Only a subject that satisfies every rule below is a CANDIDATE. Do not first collect a broader list of names or subjects.
 
-For CANDIDATE selection, <ARCH_RECENT> is the only permitted evidence source. Text outside <ARCH_RECENT> may be used for continuing the story, but must not provide a CANDIDATE name or FACT.
+For CANDIDATE selection, only the story text under the "Recent Story:" heading is permitted evidence. Plot components, Author's note, Story Cards, memories, other context sections, and these task instructions may be used for continuing the story, but must not provide a CANDIDATE name or FACT.
 
 A CANDIDATE:
 ${existingRule}
-- has one exact, continuous name or title explicitly present in <ARCH_RECENT>. Never invent, combine, complete, expand, embellish, reinterpret, or replace it.
+- has one exact, continuous name or title explicitly present in Recent Story. Never invent, combine, complete, expand, embellish, reinterpret, or replace it.
 - is itself directly and naturally one of the following types: ${archiveTypes}. If none of these types directly states what the subject itself is, it is not a CANDIDATE. Never use the closest type or qualify a subject through association, role, membership, leadership, ownership, location, use, or a logical chain.
 - is a distinct and persistent subject that remains identifiable beyond the current scene, not generic scenery, an ordinary object, a temporary event, a temporary condition, or a flavor-only detail.
-- has at least one FACT established by <ARCH_RECENT>. Never invent, expand, enrich, rationalize, or speculate beyond what <ARCH_RECENT> establishes.
+- has at least one FACT established by Recent Story. Never invent, expand, enrich, rationalize, or speculate beyond what Recent Story establishes.
 - has a FACT that is both persistently important for understanding the subject or world and already important for understanding the ongoing plot, goals, decisions, stakes, conflict, an important relationship, a world rule, or an established future interaction. Mere existence, naming, generic description, incidental location, temporary state, flavor, or possible future relevance is insufficient.
 - is worth remembering for lasting continuity. Lack of recurrence alone does not disqualify one sufficiently significant introduction.
 
-Within <ARCH_RECENT>, of all subjects satisfying every rule, only the one with the greatest lasting continuity value is the CANDIDATE.
+Within Recent Story, of all subjects satisfying every rule, only the one with the greatest lasting continuity value is the CANDIDATE.
 
-<ARCH_RECENT>
-${recentStory}
-</ARCH_RECENT>
-
-# STRICT OUTPUT FORMAT (REQUIRED)
+# 
+ FORMAT (REQUIRED)
 
 You must output exactly one parenthetical task followed by the story continuation.
 
@@ -1322,95 +1246,11 @@ TYPE, NAME, KEY and FACT must not be copied literally.
 </SYSTEM>`.trim();
     };
 
-    const buildLooseArchivistMemoryTask = (config = {}) => `
-<SYSTEM>
-# STRICT OUTPUT FORMAT
-You must output exactly one short parenthetical task followed by the story continuation.
-
-## SHORT TASK A: SELECT A USEFUL WORLD SUBJECT
-
-Examine the supplied story context for world subjects whose exact names or titles are explicitly present.
-
-Use only an exact stated name or title. Never invent, complete, expand, reinterpret, embellish, or replace it.
-
-For each candidate subject:
-
-1. Determine what the subject itself actually is.
-
-2. Apply this exhaustive WORLD_TYPE list as an eligibility filter:
-   ${config.archiveScope.join(", ") || "(none)"}
-
-3. Keep the subject only if the subject itself is directly and naturally an instance of one exact WORLD_TYPE.
-
-4. If no WORLD_TYPE directly describes what the subject itself is, reject it. Never force the closest WORLD_TYPE. Associations, roles, membership, leadership, ownership, location, use, and logical chains do not qualify.
-
-5. Select one established or strongly implied FACT. Never invent, expand, enrich, rationalize, or speculate beyond what the context supports.
-
-6. Keep the subject only if the FACT has both WORLD SIGNIFICANCE and STORY SIGNIFICANCE:
-   - WORLD SIGNIFICANCE: The FACT is persistent, non-trivial information needed to meaningfully understand the subject or world.
-   - STORY SIGNIFICANCE: The FACT already meaningfully affects or explains the ongoing plot, a character's goals or decisions, the stakes, a conflict, an important relationship, a world rule, or an established future interaction.
-
-7. From the qualifying candidates, choose at most one subject with the greatest lasting continuity value.
-
-Additional selection rules:
-
-- Accept strongly implied facts when the supplied story context makes them clear; do not require literal exposition.
-- Mere existence, naming, generic description, incidental location, temporary state, flavor, or possible future usefulness is not significant.
-- Do not reject a subject solely for lacking recurrence. One sufficiently significant introduction may be enough.
-- Compare every candidate against every existing Archive title below. Reject exact matches and clear aliases before qualifying candidates.
-- If no useful new subject can be identified without inventing unsupported information, choose (none).
-
-## EXCLUDED SUBJECTS
-
-Existing Archive titles:
-${buildArchivistTitleIndex()}
-
-## SHORT TASK B: OUTPUT ONE OPERATION
-
-Start your output immediately with exactly one of these forms:
-
-(none)
-
-(WORLD_TYPE|SUBJECT_NAME|ANY_KEY_NAME=FACT)
-
-Inside the parentheses:
-
-- Copy the chosen WORLD_TYPE exactly as you selected it.
-- Then write "|".
-- SUBJECT_NAME must be the readable story name with normal spaces, never snake_case or underscores.
-- Then write "|".
-- ANY_KEY_NAME:
-  - must contain 1-3 descriptive words.
-  - may contain letters and underscores only.
-  - use snake_case.
-  - Choose a key appropriate to the selected fact and subject type.
-  - Do not merely copy the subject type as the key.
-- Then write "=".
-${buildArchivistDiscoveryFactRule(config.archiveMaximumDiscoveryFacts, "SUBJECT_NAME", "established or strongly implied, persistent, objective world")}
-- Do not combine unrelated facts.
-- Do not store unsupported speculation, narration, dialogue, atmosphere, or temporary conditions.
-- End FACT with a period.
-- Close the parenthesis immediately after that period.
-
-Never copy WORLD_TYPE, SUBJECT_NAME, ANY_KEY_NAME, or FACT literally from these instructions.
-
-## STORY CONTINUATION
-
-- After the closing parenthesis, write exactly one space and continue the story normally.
-- Write from ${config.player}'s second-person present-tense perspective.
-- The story must continue where it previously ended.
-- The story continuation must occupy most of the response.
-</SYSTEM>`.trim();
-
     const buildArchivistMemoryTask = (
-        config = {},
-        source = text
+        config = {}
     ) => (
-        config.archiveDiscoveryStrictness === "Loose"
-        ? buildLooseArchivistMemoryTask(config)
-        : buildMediumArchivistMemoryTask(
-            config,
-            source
+        buildMediumArchivistMemoryTask(
+            config
         )
     );
 
@@ -1516,8 +1356,7 @@ Never copy WORLD_TYPE, SUBJECT_NAME, ANY_KEY_NAME, or FACT literally from these 
                 target
             )
             : buildArchivistMemoryTask(
-                config,
-                text
+                config
             );
     };
 
@@ -1670,7 +1509,6 @@ ${lines.join("\n")}
                 `Maintenance enabled: ${config.archiveMaintenance}`,
                 `Debug mode: ${config.archiveDebug}`,
                 `Discovery strictness: ${config.archiveDiscoveryStrictness}`,
-                `Maximum facts per discovery: ${config.archiveMaximumDiscoveryFacts}`,
                 `Reject placeholder keys: ${config.archiveRejectPlaceholderKeys}`,
                 `Automatically track discovered cards: ${config.archiveAutoTrackDiscovered}`,
                 `Scheduled feature: ${IS.ARCHIVIST.scheduledFeature || "(none)"}`,
@@ -1729,6 +1567,14 @@ ${lines.join("\n")}
     const ARCHIVIST_DEBUG_TITLE = "DEBUG";
     const ARCHIVIST_DEBUG_DESCRIPTION =
         "> One raw Archivist Discovery operation per line.";
+    const ARCHIVIST_CONTEXT_DUMP_KEY =
+        "@ARCHIVIST_CONTEXT_DUMP";
+    const ARCHIVIST_CONTEXT_DUMP_TITLE =
+        "Archivist Context Dump";
+    const ARCHIVIST_CONTEXT_DUMP_DESCRIPTION = [
+        "> One-time raw Context hook output captured by /arch-status.",
+        "> The entry contains the exact text returned after hidden-task prompt injection."
+    ].join("\n");
 
     const findArchivistDebugCard = () => storyCards.find(card => (
         card
@@ -1762,6 +1608,68 @@ ${lines.join("\n")}
         card.description = ARCHIVIST_DEBUG_DESCRIPTION;
 
         return card;
+    };
+
+    const findArchivistContextDumpCard = () =>
+        storyCards.find(card => (
+            card
+            && typeof card === "object"
+            && !Array.isArray(card)
+            && card.keys === ARCHIVIST_CONTEXT_DUMP_KEY
+        )) ?? null;
+
+    const writeRequestedArchivistContextDump = (
+        context = "",
+        maximumCharacters = null
+    ) => {
+        if (!IS.ARCHIVIST.contextDumpRequested) {
+            return false;
+        }
+
+        IS.ARCHIVIST.contextDumpRequested = false;
+
+        let card = findArchivistContextDumpCard();
+
+        if (!card) {
+            card = addStoryCard(
+                ARCHIVIST_CONTEXT_DUMP_KEY,
+                "",
+                "class",
+                ARCHIVIST_CONTEXT_DUMP_TITLE,
+                ARCHIVIST_CONTEXT_DUMP_DESCRIPTION,
+                { returnCard: true }
+            );
+        }
+
+        if (!card) return false;
+
+        const rawContext = typeof context === "string"
+            ? context
+            : "";
+        const maximum = Number.isInteger(maximumCharacters)
+            ? maximumCharacters
+            : null;
+
+        card.keys = ARCHIVIST_CONTEXT_DUMP_KEY;
+        card.type = "class";
+        card.title = ARCHIVIST_CONTEXT_DUMP_TITLE;
+        card.entry = rawContext;
+        card.description = [
+            ARCHIVIST_CONTEXT_DUMP_DESCRIPTION,
+            `> Captured characters: ${rawContext.length}`,
+            `> info.maxChars: ${maximum ?? "(unknown)"}`,
+            `> Remaining characters: ${
+                maximum === null
+                ? "(unknown)"
+                : maximum - rawContext.length
+            }`,
+            `> Scheduled feature: ${
+                IS.ARCHIVIST.scheduledFeature
+                || "(none)"
+            }`
+        ].join("\n");
+
+        return true;
     };
 
     const appendArchivistDiscoveryDebugOperation = (
@@ -1805,11 +1713,16 @@ ${lines.join("\n")}
         return output;
     };
 
-    const cleanArchivistDiscoveryStrictness = (value = "Medium") => (
-        cleanArchivistValue(String(value), 100).toLowerCase() === "loose"
-        ? "Loose"
-        : "Medium"
-    );
+    const cleanArchivistDiscoveryStrictness = (value = "Medium") => {
+        const normalized =
+            cleanArchivistValue(
+                String(value),
+                100
+            ).toLowerCase();
+
+        if (normalized === "medium") return "Medium";
+        return "Medium";
+    };
 
     class ArchivistConfig {
         static get() {
@@ -1820,10 +1733,6 @@ ${lines.join("\n")}
                 archiveDiscoveryStrictness:
                     cleanArchivistDiscoveryStrictness(
                         S.ARCHIVIST_DISCOVERY_STRICTNESS
-                    ),
-                archiveMaximumDiscoveryFacts:
-                    cleanArchivistMaximumDiscoveryFacts(
-                        S.ARCHIVIST_MAXIMUM_FACTS_PER_DISCOVERY
                     ),
                 archiveMaintenance: Boolean(
                     S.IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT
@@ -1929,14 +1838,12 @@ ${lines.join("\n")}
                         "> Archivist Discovery creates valuable new Archive cards.",
                         "> Archivist Maintenance updates player-selected tracked Archive cards.",
                         "> Debug mode logs raw parenthesized Discovery operations to the DEBUG card instead of the story output.",
-                        "> Set Discovery strictness to Loose or Medium.",
+                        "> Discovery strictness currently supports Medium.",
                         "> Set Discovery scope to any subject type you want to discover, e.g. Species, Religion, Nation, Character, Magic System.",
-                        "> Set Maximum facts per discovery to 1, 2, or 3.",
                         `> Enable Discovery: ${fallback.archiveDiscovery}`,
                         `> Enable Maintenance: ${fallback.archiveMaintenance}`,
                         `> Debug mode: ${fallback.archiveDebug}`,
                         `> Discovery strictness: ${fallback.archiveDiscoveryStrictness}`,
-                        `> Maximum facts per discovery: ${fallback.archiveMaximumDiscoveryFacts}`,
                         `> Reject placeholder keys: ${fallback.archiveRejectPlaceholderKeys}`,
                         `> Automatically track discovered cards: ${fallback.archiveAutoTrackDiscovered}`,
                         `> Discovery scope: ${fallback.archiveScope.join(", ")}`
@@ -2008,13 +1915,6 @@ ${lines.join("\n")}
                     ?? fallback.archiveDiscoveryStrictness
                 );
 
-            const archiveMaximumDiscoveryFacts =
-                cleanArchivistMaximumDiscoveryFacts(
-                    extract.maximumfactsperdiscovery
-                    ?? fallback.archiveMaximumDiscoveryFacts,
-                    fallback.archiveMaximumDiscoveryFacts
-                );
-
             const archiveRejectPlaceholderKeys =
                 parseBoolean(
                     extract.rejectplaceholderkeys,
@@ -2064,14 +1964,12 @@ ${lines.join("\n")}
                 "> Archivist Discovery creates valuable new Archive cards.",
                 "> Archivist Maintenance updates player-selected tracked Archive cards.",
                 "> Debug mode logs raw parenthesized Discovery operations to the DEBUG card instead of the story output.",
-                "> Set Discovery strictness to Loose or Medium.",
+                "> Discovery strictness currently supports Medium.",
                 "> Set Discovery scope to any subject type you want to discover, e.g. Species, Religion, Nation, Character, Magic System.",
-                "> Set Maximum facts per discovery to 1, 2, or 3.",
                 `> Enable Discovery: ${archiveDiscovery}`,
                 `> Enable Maintenance: ${archiveMaintenance}`,
                 `> Debug mode: ${archiveDebug}`,
                 `> Discovery strictness: ${archiveDiscoveryStrictness}`,
-                `> Maximum facts per discovery: ${archiveMaximumDiscoveryFacts}`,
                 `> Reject placeholder keys: ${archiveRejectPlaceholderKeys}`,
                 `> Automatically track discovered cards: ${archiveAutoTrackDiscovered}`,
                 `> Discovery scope: ${archiveScope.join(", ")}`
@@ -2090,7 +1988,6 @@ ${lines.join("\n")}
                 archiveMaintenance,
                 archiveDebug,
                 archiveDiscoveryStrictness,
-                archiveMaximumDiscoveryFacts,
                 archiveRejectPlaceholderKeys,
                 archiveAutoTrackDiscovered,
                 archiveScope,
@@ -2121,8 +2018,7 @@ ${lines.join("\n")}
      * @property {boolean} archiveDiscovery - Is Archivist Discovery enabled?
      * @property {boolean} archiveMaintenance - Is tracked Archive maintenance enabled?
      * @property {boolean} archiveDebug - Are raw Discovery operations logged to the DEBUG card?
-     * @property {"Loose"|"Medium"} archiveDiscoveryStrictness - How readily Discovery creates Archive cards
-     * @property {1|2|3} archiveMaximumDiscoveryFacts - Maximum coherent facts stored by one Discovery operation
+     * @property {"Medium"} archiveDiscoveryStrictness - Supported Discovery strictness
      * @property {boolean} archiveRejectPlaceholderKeys - Are literal prompt-placeholder keys rejected?
      * @property {boolean} archiveAutoTrackDiscovered - Are newly discovered Archive card names automatically added to the tracked list?
      * @property {string[]} archiveScope - Exhaustive subject types allowed for Discovery
@@ -2840,15 +2736,13 @@ ${lines.join("\n")}
             // No hidden-task feature is enabled.
             IS.encoding = "";
             text ||= " ";
+            writeRequestedArchivistContextDump(
+                text,
+                info.maxChars
+            );
             return;
         }
 
-        // ARCHIVIST AUDIT CLEANUP 1: create the shared task boundary only when a subsystem is active.
-        const boundary = Object.freeze({
-            needle: "Recent Story:",
-            upper: "<|story|>",
-            lower: "<|task|>"
-        });
         /**
          * Removes visual indicators from all story cards
          * Called when no agent is triggered or Inner Self is disabled
@@ -2871,13 +2765,26 @@ ${lines.join("\n")}
                 );
 
             if (archiveTask !== "") {
-                text = `${text.trim()}${boundary.lower}${archiveTask}
+                text = `${text.trim()}
+
+${archiveTask}
 
 `;
             }
 
+            writeRequestedArchivistContextDump(
+                text,
+                info.maxChars
+            );
             return;
         }
+
+        // Inner Self uses transient markers while truncating story context around its hidden task.
+        const boundary = Object.freeze({
+            needle: "Recent Story:",
+            upper: "<|story|>",
+            lower: "<|task|>"
+        });
 
         if (
             !config.allow
@@ -3826,16 +3733,22 @@ Follow the format **perfectly**.
         setMarker(boundary.upper, `\n\n${boundary.needle}\n`);
         setMarker(boundary.lower, "\n\n")
         text = text.trimStart() || " ";
+        writeRequestedArchivistContextDump(
+            text,
+            info.maxChars
+        );
         return;
     } else if (hook === "input") {
         // ==================== INPUT HOOK ====================
         // Defer live diagnostics until after this turn's model output is processed.
         if (/^\s*\/arch-status\s*$/i.test(text)) {
             IS.ARCHIVIST.statusRequested = true;
+            IS.ARCHIVIST.contextDumpRequested = true;
             text = "\u200B";
             return;
         }
         IS.ARCHIVIST.statusRequested = false;
+        IS.ARCHIVIST.contextDumpRequested = false;
         // Check for /AC command to force-enable Auto-Cards
         if (IS.AC.enabled || !/\/\s*A\s*C/i.test(text) || !hasAutoCards()) {
             // Normal input processing
