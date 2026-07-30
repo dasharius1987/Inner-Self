@@ -31,20 +31,24 @@ globalThis.MainSettings = (class MainSettings {
     IS_ARCHIVIST_DISCOVERY_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
-    // Is tracked Archivist Maintenance enabled when the adventure begins?
+    // Is frequency-based Archivist Maintenance enabled when the adventure begins?
     IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT: false
     // (true or false)
     ,
+    // How many mentioning AI outputs inside the recent window trigger Maintenance?
+    ARCHIVIST_MAINTENANCE_RECENT_THRESHOLD: 2
+    // (whole number, minimum 1)
+    ,
+    // How many generated AI outputs make up Maintenance's recent window?
+    ARCHIVIST_MAINTENANCE_RECENT_WINDOW: 5
+    // (whole number, minimum 1)
+    ,
+    // How many mentions since the last review trigger Maintenance regardless of recency?
+    ARCHIVIST_MAINTENANCE_TOTAL_THRESHOLD: 4
+    // (whole number, minimum 1)
+    ,
     // Should Archivist Discovery operations be logged to a DEBUG card?
     IS_ARCHIVIST_DEBUG_MODE_ENABLED_BY_DEFAULT: true
-    // (true or false)
-    ,
-    // Should obvious prompt-placeholder keys be rejected?
-    IS_ARCHIVIST_PLACEHOLDER_KEY_REJECTION_ENABLED_BY_DEFAULT: false
-    // (true or false)
-    ,
-    // Should newly discovered Archive card names be added to the tracked list automatically?
-    IS_ARCHIVIST_AUTO_TRACK_DISCOVERED_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
     // Which subject types may Archivist Discovery consider?
@@ -270,20 +274,24 @@ function InnerSelf(hook) {
     IS_ARCHIVIST_DISCOVERY_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
-    // Is tracked Archivist Maintenance enabled when the adventure begins?
+    // Is frequency-based Archivist Maintenance enabled when the adventure begins?
     IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT: false
     // (true or false)
     ,
+    // How many mentioning AI outputs inside the recent window trigger Maintenance?
+    ARCHIVIST_MAINTENANCE_RECENT_THRESHOLD: 2
+    // (whole number, minimum 1)
+    ,
+    // How many generated AI outputs make up Maintenance's recent window?
+    ARCHIVIST_MAINTENANCE_RECENT_WINDOW: 5
+    // (whole number, minimum 1)
+    ,
+    // How many mentions since the last review trigger Maintenance regardless of recency?
+    ARCHIVIST_MAINTENANCE_TOTAL_THRESHOLD: 4
+    // (whole number, minimum 1)
+    ,
     // Should Archivist Discovery operations be logged to a DEBUG card?
     IS_ARCHIVIST_DEBUG_MODE_ENABLED_BY_DEFAULT: true
-    // (true or false)
-    ,
-    // Should obvious prompt-placeholder keys be rejected?
-    IS_ARCHIVIST_PLACEHOLDER_KEY_REJECTION_ENABLED_BY_DEFAULT: false
-    // (true or false)
-    ,
-    // Should newly discovered Archive card names be added to the tracked list automatically?
-    IS_ARCHIVIST_AUTO_TRACK_DISCOVERED_ENABLED_BY_DEFAULT: true
     // (true or false)
     ,
     // Which subject types may Archivist Discovery consider?
@@ -407,7 +415,7 @@ function InnerSelf(hook) {
             // Basically AC sets this to true when it does stuff, so Inner Self can inhibit itself
             event: false
         },
-        // ARCHIVIST AUDIT CLEANUP 1: persistent state used by the live key/value lifecycle.
+        // Persistent state used by the Archivist lifecycle.
         ARCHIVIST: {
             hash: "",
             pending: null,
@@ -420,6 +428,11 @@ function InnerSelf(hook) {
             scheduleHash: "",
             scheduledFeature: "",
             rotation: 0,
+            maintenance: {
+                sequence: 0,
+                observations: [],
+                cards: {}
+            },
             stats: {
                 scans: 0,
                 none: 0,
@@ -489,25 +502,18 @@ function InnerSelf(hook) {
         return {};
     };
     // ==================== ARCHIVIST ====================
-    // Discovery creates uniform Custom cards named Archive.
-    // Tracked maintenance updates player-selected Archive cards like Inner Self brains.
+    // Discovery creates uniform Archive cards.
+    // Maintenance reviews frequently mentioned Archive cards and rewrites complete entries.
     const ARCHIVIST = Object.freeze({
         marker: "@ARCHIVIST",
-        version: 2,
+        version: 3,
         schema: "Archive",
         fallbackCardType: "Archive"
     });
 
     const ARCHIVIST_ENTRY_LIMIT = 1600;
-    const ARCHIVIST_MEMORY_KEY_LIMIT = 80;
-    const ARCHIVIST_MEMORY_VALUE_LIMIT = 500;
-    const ARCHIVIST_MEMORY_LIMIT_PER_CARD = 30;
     const ARCHIVIST_FAILURE_HISTORY_LIMIT = 10;
-    const ARCHIVIST_RESERVED_MEMORY_KEYS = new Set([
-        "any_key_name", "memory_key", "key", "new_key", "example_key",
-        "snake_case_key", "descriptive_fact_key", "unwanted_key"
-    ]);
-    let archivistRejectPlaceholderKeys = false;
+    const ARCHIVIST_OUTPUT_OBSERVATION_LIMIT = 20;
     const ARCHIVIST_GENERIC_TRIGGERS = new Set([
         "character", "person", "people", "location", "place", "region", "village",
         "town", "city", "forest", "race", "species", "class", "profession", "job",
@@ -562,18 +568,6 @@ function InnerSelf(hook) {
         if (["faction", "factions"].includes(normalized)) return "faction";
 
         return clean || ARCHIVIST.fallbackCardType;
-    };
-
-    const cleanArchivistMemoryKey = (key = "") => {
-        const clean = (typeof key === "string")
-            ? key.replace(/[\u200B-\u200D]+/g, "").trim().toLowerCase()
-                .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
-                .replace(/_+/g, "_").slice(0, ARCHIVIST_MEMORY_KEY_LIMIT)
-            : "";
-        return (
-            archivistRejectPlaceholderKeys
-            && ARCHIVIST_RESERVED_MEMORY_KEYS.has(clean)
-        ) ? "" : clean;
     };
 
     const readArchivistMetadata = (card = {}) => {
@@ -631,37 +625,59 @@ function InnerSelf(hook) {
         )) ?? null;
     };
 
-    const parseArchivistMemories = (entry = "") => {
-        const memories = {};
-        if (typeof entry !== "string") return memories;
-        for (const raw of entry.split("\n")) {
-            const line = raw.trim(), separator = line.indexOf(":");
-            if (separator < 1) continue;
-            const key = cleanArchivistMemoryKey(line.slice(0, separator));
-            const value = cleanArchivistValue(line.slice(separator + 1), ARCHIVIST_MEMORY_VALUE_LIMIT);
-            if (key !== "" && value !== "") memories[key] = value;
+    const parseArchivistEntryContent = (entry = "") => {
+        if (typeof entry !== "string") return "";
+        const lines = entry.split("\n");
+        const firstContent = lines.findIndex(
+            line => line.trim() !== ""
+        );
+        if (
+            firstContent !== -1
+            && lines[firstContent].trimStart().startsWith("{")
+        ) {
+            lines.splice(firstContent, 1);
         }
-        return memories;
+        const lastContent = lines.findLastIndex(
+            line => line.trim() !== ""
+        );
+        if (
+            lastContent !== -1
+            && lines[lastContent].trim() === "}"
+        ) {
+            lines.splice(lastContent, 1);
+        }
+        return cleanArchivistValue(
+            lines.join(" "),
+            ARCHIVIST_ENTRY_LIMIT
+        );
     };
 
-    const renderArchivistMemories = (memories = {}) => Object.entries(memories)
-        .filter(([key, value]) => cleanArchivistMemoryKey(key) !== "" && cleanArchivistValue(value, ARCHIVIST_MEMORY_VALUE_LIMIT) !== "")
-        .slice(0, ARCHIVIST_MEMORY_LIMIT_PER_CARD)
-        .map(([key, value]) => `${cleanArchivistMemoryKey(key)}: ${cleanArchivistValue(value, ARCHIVIST_MEMORY_VALUE_LIMIT)}`)
-        .join("\n");
+    const renderArchivistEntry = (
+        title = "",
+        content = ""
+    ) => {
+        title = cleanArchivistTitle(title);
+        content = parseArchivistEntryContent(content);
+        return title !== "" && content !== ""
+            ? `{${title}\n${content}\n}`
+            : "";
+    };
 
     const createArchivistCard = ({
         title = "",
         worldType = "",
         entry = "",
         triggers = [],
-        turn = history.length
+        turn = archivistActionCount()
     } = {}) => {
         title = cleanArchivistTitle(title);
         worldType = cleanArchivistWorldType(worldType);
-        entry = renderArchivistMemories(parseArchivistMemories(entry));
+        entry = renderArchivistEntry(
+            title,
+            entry
+        );
         const id = archivistId(title);
-        if (id === "" || worldType === "" || entry === "") return { ok: false, reason: "invalid_memory" };
+        if (id === "" || worldType === "" || entry === "") return { ok: false, reason: "invalid_entry" };
         if (findArchivistCard(id)) return { ok: false, reason: "already_exists" };
         if (findArchivistTitleCollision(title)) return { ok: false, reason: "manual_collision" };
         const metadata = {
@@ -683,26 +699,20 @@ function InnerSelf(hook) {
         return card ? { ok: true, reason: "created", card } : { ok: false, reason: "creation_failed" };
     };
 
-    const rewriteArchivistCard = ({ title = "", entry = "", turn = history.length } = {}) => {
+    const rewriteArchivistCard = ({ title = "", entry = "", turn = archivistActionCount() } = {}) => {
         const card = findArchivistCard(title);
-        entry = renderArchivistMemories(parseArchivistMemories(entry));
         if (!card) return { ok: false, reason: "not_found" };
+        entry = renderArchivistEntry(
+            card.title ?? title,
+            entry
+        );
         if (entry === "") return { ok: false, reason: "empty_entry" };
-        if (renderArchivistMemories(parseArchivistMemories(card.entry ?? "")) === entry) return { ok: true, reason: "unchanged", card };
+        if ((card.entry ?? "").trim() === entry) return { ok: true, reason: "unchanged", card };
         const metadata = readArchivistMetadata(card);
         metadata.updatedTurn = turn;
         card.entry = entry;
         card.description = writeArchivistMetadata(metadata, readArchivistNotes(card));
         return { ok: true, reason: "rewritten", card };
-    };
-
-    const deleteArchivistCard = ({ title = "" } = {}) => {
-        const card = findArchivistCard(title);
-        if (!card) return { ok: false, reason: "not_found" };
-        const index = storyCards.indexOf(card);
-        if (index < 0) return { ok: false, reason: "not_found" };
-        if (typeof removeStoryCard === "function") removeStoryCard(index); else storyCards.splice(index, 1);
-        return { ok: true, reason: "deleted" };
     };
 
     const countArchivistResult = (key = "") => {
@@ -728,48 +738,6 @@ function InnerSelf(hook) {
                 - ARCHIVIST_FAILURE_HISTORY_LIMIT
             );
         }
-    };
-
-    const assignArchivistMemory = ({
-        title = "",
-        worldType = "",
-        key = "",
-        value = "",
-        turn = history.length
-    } = {}) => {
-        title = cleanArchivistTitle(title);
-        worldType = cleanArchivistWorldType(worldType);
-        key = cleanArchivistMemoryKey(key);
-        value = cleanArchivistValue(value, ARCHIVIST_MEMORY_VALUE_LIMIT);
-        if (archivistId(title) === "" || key === "" || value === "") return { ok: false, reason: "invalid_memory" };
-        const card = findArchivistCard(title);
-        if (!card) return createArchivistCard({
-            title,
-            worldType,
-            entry: `${key}: ${value}`,
-            triggers: [title],
-            turn
-        });
-        const memories = parseArchivistMemories(card.entry ?? "");
-        if (memories[key] === value) return { ok: true, reason: "unchanged", card };
-        const existed = Object.prototype.hasOwnProperty.call(memories, key);
-        memories[key] = value;
-        const result = rewriteArchivistCard({ title, entry: renderArchivistMemories(memories), turn });
-        if (result.ok && result.reason === "rewritten") result.reason = existed ? "memory_updated" : "memory_created";
-        return result;
-    };
-
-    const deleteArchivistMemory = ({ title = "", key = "", turn = history.length } = {}) => {
-        key = cleanArchivistMemoryKey(key);
-        const card = findArchivistCard(title);
-        if (!card) return { ok: false, reason: "not_found" };
-        const memories = parseArchivistMemories(card.entry ?? "");
-        if (!Object.prototype.hasOwnProperty.call(memories, key)) return { ok: false, reason: "memory_not_found" };
-        delete memories[key];
-        if (Object.keys(memories).length === 0) return deleteArchivistCard({ title });
-        const result = rewriteArchivistCard({ title, entry: renderArchivistMemories(memories), turn });
-        if (result.ok && result.reason === "rewritten") result.reason = "memory_deleted";
-        return result;
     };
 
     const splitArchivistOperationFields = (
@@ -798,27 +766,9 @@ function InnerSelf(hook) {
         return fields;
     };
 
-    const splitArchivistAssignmentField = (
-        source = ""
-    ) => {
-        const separator = source.indexOf("=");
-
-        if (
-            separator <= 0
-            || source.slice(0, separator).includes("\n")
-        ) {
-            return null;
-        }
-
-        return [
-            source.slice(0, separator).trim(),
-            source.slice(separator + 1).trim()
-        ];
-    };
-
-    const cleanArchivistFactValue = (
+    const cleanArchivistOperationContent = (
         value = "",
-        limit = ARCHIVIST_MEMORY_VALUE_LIMIT
+        limit = ARCHIVIST_ENTRY_LIMIT
     ) => {
         if (typeof value !== "string") return "";
 
@@ -836,7 +786,7 @@ function InnerSelf(hook) {
         return cleanArchivistValue(raw, limit);
     };
 
-    const parseArchivistMemoryOperation = (
+    const parseArchivistOperation = (
         source = "",
         mode = ""
     ) => {
@@ -849,47 +799,68 @@ function InnerSelf(hook) {
             if (end === -1) { const lineEnd = source.indexOf("\n", openerPattern.lastIndex); end = lineEnd === -1 ? source.length : lineEnd; } else end += 1;
             const raw = source.slice(start, end);
             const inner = raw.slice(1, raw.endsWith(closer) ? -1 : undefined).trim();
-            if (!/^none\b/i.test(inner) && !inner.includes("|")) continue;
-            const rest = (source.slice(0, start) + source.slice(end)).replace(/\n{3,}/g, "\n\n").trim();
+            if (
+                mode === "maintenance"
+                ? source.slice(0, start).trim() !== ""
+                : (
+                    !/^none\b/i.test(inner)
+                    && !inner.includes("|")
+                )
+            ) continue;
+            const rest = (source.slice(0, start) + source.slice(end)).replace(/\n{3,}/g, "\n\n").trimEnd();
             if (/^none\s*$/i.test(inner)) return { matched: true, valid: true, kind: "none", raw, start, end, rest };
 
-            if (mode !== "discovery") {
-                const deletion = inner.match(/^([^|:\n]+)\s*\|\s*delete\s+([a-zA-Z0-9 _-]+)\s*$/i);
-                if (deletion) {
-                    const title = cleanArchivistTitle(deletion[1]), key = cleanArchivistMemoryKey(deletion[2]);
-                    return { matched: true, valid: title !== "" && key !== "", kind: "delete_memory", title, key, raw, start, end, rest };
-                }
+            if (mode === "maintenance") {
+                const content = cleanArchivistOperationContent(
+                    inner
+                );
+                const placeholderContent =
+                    /^(?:new[\s_-]*entry|full[\s_-]*content|content)$/i.test(
+                        content
+                    );
+                const oldRewriteFormat =
+                    /^rewrite\s*=/i.test(content);
+                return {
+                    matched: true,
+                    valid:
+                        content !== ""
+                        && !placeholderContent
+                        && !oldRewriteFormat,
+                    kind: placeholderContent
+                        ? "placeholder_content"
+                        : oldRewriteFormat
+                        ? "malformed_entry"
+                        : "rewrite_archive",
+                    content,
+                    raw,
+                    start,
+                    end,
+                    rest
+                };
             }
 
-            if (mode !== "tracked") {
+            if (mode === "discovery") {
                 const fields =
                     splitArchivistOperationFields(
                         inner
                     );
 
                 if (fields.length === 3) {
-                    const worldType =
-                        cleanArchivistWorldType(
-                            fields[0]
-                        );
                     const title =
                         cleanArchivistTitle(
+                            fields[0]
+                        );
+                    const worldType =
+                        cleanArchivistWorldType(
                             fields[1]
                         );
-                    const assignment =
-                        splitArchivistAssignmentField(
+                    const content =
+                        cleanArchivistOperationContent(
                             fields[2]
                         );
-                    const key =
-                        cleanArchivistMemoryKey(
-                            assignment?.[0]
-                            ?? ""
-                        );
-                    const value =
-                        cleanArchivistFactValue(
-                            assignment?.[1]
-                            ?? "",
-                            ARCHIVIST_MEMORY_VALUE_LIMIT
+                    const assignmentFormat =
+                        /^[a-z0-9_]{1,80}\s*=/i.test(
+                            content
                         );
 
                     return {
@@ -897,15 +868,14 @@ function InnerSelf(hook) {
                         valid:
                             worldType !== ""
                             && title !== ""
-                            && key !== ""
-                            && value !== "",
-                        kind: assignment
-                            ? "assign_memory"
-                            : "malformed_memory",
+                            && content !== ""
+                            && !assignmentFormat,
+                        kind: assignmentFormat
+                            ? "unsupported_assignment_format"
+                            : "create_archive",
                         worldType,
                         title,
-                        key,
-                        value,
+                        content,
                         raw,
                         start,
                         end,
@@ -914,56 +884,182 @@ function InnerSelf(hook) {
                 }
             }
 
-            if (mode !== "discovery") {
-                const assignment = inner.match(/^([^|:\n]+)\s*\|\s*([^|=\n]+?)\s*=\s*([\s\S]+)$/i);
-                if (assignment) {
-                    const title = cleanArchivistTitle(assignment[1]), key = cleanArchivistMemoryKey(assignment[2]);
-                    const value = cleanArchivistFactValue(assignment[3], ARCHIVIST_MEMORY_VALUE_LIMIT);
-                    return { matched: true, valid: title !== "" && key !== "" && value !== "", kind: "assign_memory", title, key, value, raw, start, end, rest };
-                }
-            }
-
-            return { matched: true, valid: false, kind: "malformed_memory", raw, start, end, rest };
+            return { matched: true, valid: false, kind: "malformed_entry", raw, start, end, rest };
         }
         return { matched: false, valid: false, kind: "missing", rest: source };
     };
 
-    const addArchivistTrackedName = (config = {}, title = "") => {
+    const ensureArchivistMaintenanceState = () => {
         if (
-            !config.archiveAutoTrackDiscovered
-            || !config.card
-            || typeof config.card !== "object"
-        ) return false;
+            !IS.ARCHIVIST.maintenance
+            || typeof IS.ARCHIVIST.maintenance
+                !== "object"
+            || Array.isArray(
+                IS.ARCHIVIST.maintenance
+            )
+        ) {
+            IS.ARCHIVIST.maintenance = {};
+        }
 
-        const cleanTitle = cleanArchivistTitle(title);
-        if (cleanTitle === "") return false;
-
-        const tracked = cleanArchivistList([
-            ...(config.archiveTracked ?? []),
-            cleanTitle
-        ]);
-
-        if (tracked.length === (config.archiveTracked ?? []).length) return false;
-
-        config.archiveTracked = tracked;
-        config.card.description = [
-            "> Write exact world subject names to maintain on separate lines below.",
-            "",
-            ...tracked,
-            ""
-        ].join("\n");
-
-        return true;
+        const maintenance =
+            IS.ARCHIVIST.maintenance;
+        if (!Number.isInteger(maintenance.sequence)) {
+            maintenance.sequence = 0;
+        }
+        if (!Array.isArray(maintenance.observations)) {
+            maintenance.observations = [];
+        }
+        if (
+            !maintenance.cards
+            || typeof maintenance.cards !== "object"
+            || Array.isArray(maintenance.cards)
+        ) {
+            maintenance.cards = {};
+        }
+        return maintenance;
     };
 
-    const applyArchivistMemoryOperation = (
+    const ensureArchivistMentionStats = (
+        titleOrId = ""
+    ) => {
+        const id = archivistId(titleOrId);
+        if (id === "") return null;
+        const maintenance =
+            ensureArchivistMaintenanceState();
+        const current = maintenance.cards[id];
+        if (
+            !current
+            || typeof current !== "object"
+            || Array.isArray(current)
+        ) {
+            maintenance.cards[id] = {
+                total: 0,
+                mentionSequences: [],
+                lastMentionSequence: -1,
+                resetSequence:
+                    maintenance.sequence
+            };
+        }
+
+        const stats = maintenance.cards[id];
+        if (!Number.isInteger(stats.total)) {
+            stats.total = 0;
+        }
+        if (!Array.isArray(stats.mentionSequences)) {
+            stats.mentionSequences = [];
+        }
+        if (!Number.isInteger(stats.lastMentionSequence)) {
+            stats.lastMentionSequence = -1;
+        }
+        if (!Number.isInteger(stats.resetSequence)) {
+            stats.resetSequence =
+                maintenance.sequence;
+        }
+        return stats;
+    };
+
+    const resetArchivistMentionStats = (
+        titleOrId = "",
+        sequence = null
+    ) => {
+        const stats =
+            ensureArchivistMentionStats(titleOrId);
+        if (!stats) return;
+        const maintenance =
+            ensureArchivistMaintenanceState();
+        stats.total = 0;
+        stats.mentionSequences = [];
+        stats.lastMentionSequence = -1;
+        stats.resetSequence =
+            Number.isInteger(sequence)
+            ? sequence
+            : maintenance.sequence;
+    };
+
+    const prepareArchivistOutputObservation = () => {
+        const maintenance =
+            ensureArchivistMaintenanceState();
+        const actionKey = Number.isInteger(
+            info.actionCount
+        )
+            ? `action:${info.actionCount}`
+            : `context:${
+                IS.ARCHIVIST.pending?.hash
+                ?? historyHash()
+            }`;
+        let observation =
+            maintenance.observations.findLast(
+                candidate => (
+                    candidate?.actionKey
+                    === actionKey
+                )
+            );
+
+        if (observation) {
+            for (
+                const id
+                of observation.mentionedIds ?? []
+            ) {
+                const stats =
+                    ensureArchivistMentionStats(id);
+                if (
+                    !stats
+                    || observation.sequence
+                        < stats.resetSequence
+                ) continue;
+                stats.total = Math.max(
+                    0,
+                    stats.total - 1
+                );
+                stats.mentionSequences =
+                    stats.mentionSequences.filter(
+                        sequence => (
+                            sequence
+                            !== observation.sequence
+                        )
+                    );
+                stats.lastMentionSequence =
+                    stats.mentionSequences.length
+                    ? Math.max(
+                        ...stats.mentionSequences
+                    )
+                    : -1;
+            }
+            observation.mentionedIds = [];
+            return observation;
+        }
+
+        maintenance.sequence++;
+        observation = {
+            actionKey,
+            sequence: maintenance.sequence,
+            mentionedIds: []
+        };
+        maintenance.observations.push(
+            observation
+        );
+        if (
+            ARCHIVIST_OUTPUT_OBSERVATION_LIMIT
+            < maintenance.observations.length
+        ) {
+            maintenance.observations.splice(
+                0,
+                maintenance.observations.length
+                - ARCHIVIST_OUTPUT_OBSERVATION_LIMIT
+            );
+        }
+        return observation;
+    };
+
+    const applyArchivistOperation = (
         operation = {},
         config = {},
-        turn = history.length,
-        pending = {}
+        turn = archivistActionCount(),
+        pending = {},
+        observationSequence = null
     ) => {
         const routeEnabled = (
-            (pending.mode === "tracked")
+            (pending.mode === "maintenance")
             ? config.archiveMaintenance
             : (pending.mode === "discovery")
             ? config.archiveDiscovery
@@ -974,8 +1070,7 @@ function InnerSelf(hook) {
         if (!operation.valid) {
             if (
                 [
-                    "existing_archive_blocked",
-                    "tracked_discovery_blocked"
+                    "existing_archive_blocked"
                 ].includes(operation.kind)
             ) {
                 countArchivistResult("duplicates");
@@ -991,30 +1086,45 @@ function InnerSelf(hook) {
                 reason: "malformed"
             };
         }
-        if (operation.kind === "none") { countArchivistResult("none"); return { ok: true, reason: "none" }; }
-        const result = operation.kind === "assign_memory"
-            ? assignArchivistMemory({
-                title: operation.title,
-                worldType: operation.worldType,
-                key: operation.key,
-                value: operation.value,
-                turn
-            })
-            : operation.kind === "delete_memory"
-            ? deleteArchivistMemory({ title: operation.title, key: operation.key, turn })
-            : { ok: false, reason: "unknown_operation" };
-        if (result.ok) {
-            if (
-                result.reason === "created"
-                && pending.mode === "discovery"
-            ) {
-                addArchivistTrackedName(
-                    config,
-                    operation.title
+        if (operation.kind === "none") {
+            countArchivistResult("none");
+            if (pending.mode === "maintenance") {
+                resetArchivistMentionStats(
+                    pending.target?.title ?? "",
+                    observationSequence
                 );
             }
+            return { ok: true, reason: "none" };
+        }
+        const result = operation.kind === "create_archive"
+            ? createArchivistCard({
+                title: operation.title,
+                worldType: operation.worldType,
+                entry: operation.content,
+                triggers: [operation.title],
+                turn
+            })
+            : operation.kind === "rewrite_archive"
+            ? rewriteArchivistCard({
+                title: pending.target?.title ?? "",
+                entry: operation.content,
+                turn
+            })
+            : { ok: false, reason: "unknown_operation" };
+        if (result.ok) {
             if (result.reason === "created") countArchivistResult("created");
-            else if (["memory_created", "memory_updated", "memory_deleted", "deleted"].includes(result.reason)) countArchivistResult("updated");
+            else if (result.reason === "rewritten") countArchivistResult("updated");
+            if (result.reason === "created") {
+                resetArchivistMentionStats(
+                    operation.title,
+                    observationSequence
+                );
+            } else if (pending.mode === "maintenance") {
+                resetArchivistMentionStats(
+                    pending.target?.title ?? "",
+                    observationSequence
+                );
+            }
         } else if (["manual_collision", "already_exists"].includes(result.reason)) countArchivistResult("duplicates");
         else countArchivistResult("rejected");
         return result;
@@ -1065,43 +1175,219 @@ function InnerSelf(hook) {
         return output.length ? output.join(separator) : "(none)";
     };
 
-    const findTrackedArchivistTarget = (config = {}, source = text) => {
-        if (!Array.isArray(config.archiveTracked) || config.archiveTracked.length === 0 || typeof source !== "string") return null;
-        const lower = source.toLowerCase(); let selected = null;
-        for (const tracked of config.archiveTracked) {
-            const mention = lower.lastIndexOf(tracked.toLowerCase());
-            if (mention < 0 || (selected && mention <= selected.mention)) continue;
-            const card = findArchivistCard(tracked);
-            selected = { title: card?.title ?? tracked, card, mention };
+    const containsArchivistTrigger = (
+        source = "",
+        trigger = ""
+    ) => {
+        const haystack = String(source).toLowerCase();
+        const needle = cleanArchivistValue(
+            trigger,
+            100
+        ).toLowerCase();
+        if (needle === "") return false;
+
+        let index = haystack.indexOf(needle);
+        while (index !== -1) {
+            const before = haystack[index - 1] ?? "";
+            const after = haystack[index + needle.length] ?? "";
+            if (
+                !/[a-z0-9]/i.test(before)
+                && !/[a-z0-9]/i.test(after)
+            ) return true;
+            index = haystack.indexOf(
+                needle,
+                index + needle.length
+            );
         }
-        return selected;
+        return false;
     };
 
-    const buildTrackedArchivistTask = (config = {}, target = {}) => {
-        const memories = target.card ? renderArchivistMemories(parseArchivistMemories(target.card.entry ?? "")) : "(none yet)";
+    const recordArchivistOutputMentions = (
+        storyOutput = "",
+        observation = null,
+        eligibleIds = new Set()
+    ) => {
+        if (
+            !observation
+            || !Number.isInteger(
+                observation.sequence
+            )
+            || typeof storyOutput !== "string"
+            || storyOutput
+                .replace(/[\u200B-\u200D]+/g, "")
+                .trim() === ""
+        ) return;
+
+        for (const card of storyCards) {
+            const metadata =
+                readArchivistMetadata(card);
+            const id = metadata.id ?? "";
+            if (
+                id === ""
+                || !eligibleIds.has(id)
+            ) continue;
+
+            const triggers = cleanArchivistTriggers(
+                card.title ?? "",
+                card.keys ?? ""
+            );
+            if (
+                !triggers.some(trigger => (
+                    containsArchivistTrigger(
+                        storyOutput,
+                        trigger
+                    )
+                ))
+            ) continue;
+
+            const stats =
+                ensureArchivistMentionStats(id);
+            if (!stats) continue;
+            stats.total++;
+            if (
+                !stats.mentionSequences.includes(
+                    observation.sequence
+                )
+            ) {
+                stats.mentionSequences.push(
+                    observation.sequence
+                );
+            }
+            stats.lastMentionSequence =
+                observation.sequence;
+            observation.mentionedIds.push(id);
+        }
+    };
+
+    const getArchivistMentionMetrics = (
+        card = {},
+        config = {}
+    ) => {
+        const metadata =
+            readArchivistMetadata(card);
+        const id = metadata.id ?? "";
+        const stats =
+            ensureArchivistMentionStats(id);
+        const maintenance =
+            ensureArchivistMaintenanceState();
+        const recentWindow = Number.isInteger(
+            config.archiveMaintenanceRecentWindow
+        )
+            ? config.archiveMaintenanceRecentWindow
+            : 5;
+        const recentStart =
+            maintenance.sequence
+            - recentWindow
+            + 1;
+        const recentSequences = stats
+            ? stats.mentionSequences.filter(
+                sequence => (
+                    recentStart <= sequence
+                )
+            )
+            : [];
+
+        const total = stats?.total ?? 0;
+        const recent = recentSequences.length;
+        const recentThreshold = Number.isInteger(
+            config.archiveMaintenanceRecentThreshold
+        )
+            ? config.archiveMaintenanceRecentThreshold
+            : 2;
+        const totalThreshold = Number.isInteger(
+            config.archiveMaintenanceTotalThreshold
+        )
+            ? config.archiveMaintenanceTotalThreshold
+            : 4;
+
+        return {
+            total,
+            recent,
+            lastMentionSequence:
+                stats?.lastMentionSequence
+                ?? -1,
+            due:
+                recentThreshold <= recent
+                || totalThreshold <= total
+        };
+    };
+
+    const findArchivistMaintenanceTarget = (
+        config = {}
+    ) => {
+        const candidates = storyCards
+            .map(card => {
+                const metadata =
+                    readArchivistMetadata(card);
+                if (!metadata.id) return null;
+                return {
+                    title: cleanArchivistTitle(
+                        card.title ?? ""
+                    ),
+                    worldType:
+                        cleanArchivistWorldType(
+                            metadata.worldType ?? ""
+                        ),
+                    card,
+                    ...getArchivistMentionMetrics(
+                        card,
+                        config
+                    )
+                };
+            })
+            .filter(candidate => (
+                candidate?.due
+            ))
+            .sort((left, right) => (
+                right.recent - left.recent
+                || right.total - left.total
+                || right.lastMentionSequence
+                    - left.lastMentionSequence
+            ));
+
+        return candidates[0] ?? null;
+    };
+
+    const buildArchivistMaintenanceTask = (
+        target = {}
+    ) => {
+        const content = target.card
+            ? parseArchivistEntryContent(
+                target.card.entry ?? ""
+            )
+            : "";
         return `
 <SYSTEM>
-# ARCHIVIST: TRACKED ARCHIVE
+# UPDATE STORY CARD (REQUIRED)
+Determine whether the current Story Card for "${target.title}" needs an update.
 
-Begin the response with exactly one operation, then continue the story normally.
-Maintain only this player-selected subject: ${target.title}
+Current Story Card:
+<ARCHIVE_ENTRY>${content}</ARCHIVE_ENTRY>
 
-Choose exactly one form:
-(none)
-(${target.title} | any_key_name = \`One short objective world fact.\`)
-(${target.title} | delete unwanted_key)
+Use only Recent Story as evidence.
 
-Rules:
-- any_key_name and unwanted_key are placeholders. Never copy either literally.
-- Choose a short descriptive snake_case key, or reuse an existing exact key to replace its value.
-- Store only explicitly established, persistent, useful facts about ${target.title}.
-- Ignore narration, dialogue, speculation, atmosphere, and temporary details.
-- Use (none) when nothing meaningful changed.
-- Update no other subject.
-- Continue the story after the operation; the story must occupy most of the response.
+# STRICT OUTPUT FORMAT (REQUIRED)
+You must output exactly one parenthetical task followed by the STORY CONTINUATION.
 
-Existing memories:
-${memories}
+## NO UPDATE NECESSARY (OPTION A)
+If Recent Story establishes no new persistent significant fact directly about ${target.title} and neither changes, contradicts, nor disproves a stored fact, output (none) followed by the STORY CONTINUATION.
+
+## UPDATE STORY CARD (OPTION B)
+Otherwise use the following format:
+(NEW_ENTRY)
+
+Inside the parentheses:
+- Replace NEW_ENTRY with the complete replacement entry about ${target.title}, not a patch.
+- Preserve every stored fact unless Recent Story explicitly changes, contradicts, or disproves it.
+- Add only newly established persistent significant facts. Replace outdated facts and remove disproven facts.
+- NEW_ENTRY must be concise, objective, self-contained third-person prose that explicitly names ${target.title}. Never invent, infer, enrich, or speculate.
+- Do not include a title header, braces, labels, line breaks, or parentheses in NEW_ENTRY.
+
+NEW_ENTRY must not be copied literally.
+
+## STORY CONTINUATION (REQUIRED)
+- After the closing parenthesis, add a space.
+- Continue the story as if this entire System entry had not existed.
 </SYSTEM>`.trim();
     };
 
@@ -1109,7 +1395,7 @@ ${memories}
         if (!operation.valid || operation.kind === "none") return operation;
         if (
             pending.mode === "discovery"
-            && operation.kind === "assign_memory"
+            && operation.kind === "create_archive"
         ) {
             if (
                 findArchivistCard(
@@ -1122,36 +1408,18 @@ ${memories}
                     kind: "existing_archive_blocked"
                 };
             }
-
-            const allowedWorldTypes = new Set(
-                (config.archiveScope ?? []).map(
-                    worldType => cleanArchivistWorldType(
-                        worldType
-                    ).toLowerCase()
-                )
-            );
-            if (
-                !allowedWorldTypes.has(
-                    cleanArchivistWorldType(
-                        operation.worldType
-                        ?? ""
-                    ).toLowerCase()
-                )
-            ) {
-                return {
-                    ...operation,
-                    valid: false,
-                    kind: "invalid_world_type"
-                };
-            }
         }
-        const target = pending.target;
-        if (target) return archivistId(operation.title) === archivistId(target.title)
-            ? operation : { ...operation, valid: false, kind: "wrong_tracked_target" };
-        const trackedIds = new Set((config.archiveTracked ?? []).map(archivistId));
-        return trackedIds.has(archivistId(operation.title))
-            ? { ...operation, valid: false, kind: "tracked_discovery_blocked" }
-            : operation;
+        if (
+            pending.mode === "maintenance"
+            && operation.kind !== "rewrite_archive"
+        ) {
+            return {
+                ...operation,
+                valid: false,
+                kind: "wrong_maintenance_operation"
+            };
+        }
+        return operation;
     };
 
     const resolveArchivistOperationWorldType = (
@@ -1164,11 +1432,11 @@ ${memories}
         );
         if (direct !== "") return direct;
 
-        const tracked = cleanArchivistWorldType(
+        const targetType = cleanArchivistWorldType(
             pending.target?.worldType
             ?? ""
         );
-        if (tracked !== "") return tracked;
+        if (targetType !== "") return targetType;
 
         const card = findArchivistCard(
             operation.title
@@ -1182,7 +1450,7 @@ ${memories}
         );
     };
 
-    const buildMediumArchivistMemoryTask = (
+    const buildMediumArchivistDiscoveryTask = (
         config = {}
     ) => {
         const existingTitles =
@@ -1196,7 +1464,6 @@ ${memories}
         return `
 <SYSTEM>
 # CANDIDATE SELECTION (REQUIRED)
-
 Only a subject that satisfies every rule below is a CANDIDATE. Do not first collect a broader list of names or subjects.
 
 For CANDIDATE selection, only the story text under the "Recent Story:" heading is permitted evidence. Plot components, Author's note, Story Cards, memories, other context sections, and these task instructions may be used for continuing the story, but must not provide a CANDIDATE name or FACT.
@@ -1212,51 +1479,101 @@ ${existingRule}
 
 Within Recent Story, of all subjects satisfying every rule, only the one with the greatest lasting continuity value is the CANDIDATE.
 
-# 
- FORMAT (REQUIRED)
-
+# STRICT OUTPUT FORMAT (REQUIRED)
 You must output exactly one parenthetical task followed by the story continuation.
 
 ## NO CANDIDATE (OPTION A)
-
 If you have no CANDIDATE, simply output (none) followed by the STORY CONTINUATION.
 
 ## ONE CANDIDATE (OPTION B)
-
 Use the following format:
-(TYPE|NAME|KEY=FACT)
+(NAME|TYPE|FACT)
 
 Inside the parentheses:
 
-- Replace TYPE with the exact type by which the CANDIDATE qualified.
-- Then write "|".
 - Replace NAME with the CANDIDATE's readable story name using normal spaces, never snake_case or underscores.
 - Then write "|".
-- Replace KEY with 1-3 descriptive lowercase snake_case words that describe the selected FACT.
-- Then write "=".
-- Replace FACT with the significant FACT of the CANDIDATE.
+- Replace TYPE with the exact type by which the CANDIDATE qualified.
+- Then write "|".
+- Replace FACT with the significant FACT of the CANDIDATE. FACT must be one concise, objective, self-contained third-person sentence that explicitly names NAME.
 - End FACT with a period, then immediately close the parenthesis.
 
-TYPE, NAME, KEY and FACT must not be copied literally.
+NAME, TYPE and FACT must not be copied literally.
 
 ## STORY CONTINUATION (REQUIRED)
-
 - After the closing parenthesis, add a space.
 - Continue the story as if this entire System entry had not existed.
 </SYSTEM>`.trim();
     };
 
-    const buildArchivistMemoryTask = (
+    const buildArchivistDiscoveryTask = (
         config = {}
     ) => (
-        buildMediumArchivistMemoryTask(
+        buildMediumArchivistDiscoveryTask(
             config
         )
     );
 
+    const archivistActionCount = () => (
+        Number.isInteger(info.actionCount)
+        ? info.actionCount
+        : history.length
+    );
+
+    const appendArchivistTaskWithinLimit = (
+        context = "",
+        task = "",
+        maximumCharacters = null
+    ) => {
+        const recentHeading = "Recent Story:";
+        let base = context.trim();
+        const build = () => `${base}
+
+${task}
+
+`;
+        let output = build();
+
+        if (
+            !Number.isInteger(maximumCharacters)
+            || maximumCharacters <= 5
+        ) {
+            return output;
+        }
+
+        const limit = maximumCharacters - 5;
+        if (output.length <= limit) return output;
+
+        const headingIndex = base.indexOf(recentHeading);
+        if (headingIndex === -1) return output;
+
+        const storyStart = headingIndex + recentHeading.length;
+        const authorNoteOffset = base.slice(storyStart).search(
+            /\n\s*\[author['’]s note:/i
+        );
+        const storyEnd = authorNoteOffset === -1
+            ? base.length
+            : storyStart + authorNoteOffset;
+        const storyLength = Math.max(storyEnd - storyStart, 0);
+        const remove = Math.min(output.length - limit, storyLength);
+        if (remove < 1) return output;
+
+        let cut = storyStart + remove;
+        while (
+            cut < storyEnd
+            && base.charCodeAt(cut) > 32
+        ) {
+            cut++;
+        }
+
+        base = `${base.slice(0, storyStart).trimEnd()}
+${base.slice(cut, storyEnd).trimStart()}${base.slice(storyEnd)}`;
+        return build();
+    };
+
     /**
      * Rotates enabled hidden-task features in this order:
-     * Inner Self, tracked Maintenance, Discovery.
+     * Inner Self, Maintenance, Discovery.
      * Disabled features are omitted and their turns go to the remaining features.
      */
     const selectInnerSelfFeature = (config = {}) => {
@@ -1296,7 +1613,7 @@ TYPE, NAME, KEY and FACT must not be copied literally.
         return feature;
     };
 
-    const requestArchivistMemoryTask = (
+    const requestArchivistTask = (
         config = {},
         scheduledFeature = ""
     ) => {
@@ -1314,48 +1631,60 @@ TYPE, NAME, KEY and FACT must not be copied literally.
         let target = null;
 
         if (scheduledFeature === "maintenance") {
-            target = findTrackedArchivistTarget(
-                config,
-                text
-            );
+            target =
+                findArchivistMaintenanceTarget(
+                    config
+                );
 
-            // Maintenance owns this turn even when no tracked subject is active.
-            if (!target) return "";
-        } else if (
+            if (!target) {
+                if (
+                    !config.archiveDiscovery
+                    || !Array.isArray(
+                        config.archiveScope
+                    )
+                    || config.archiveScope.length
+                        === 0
+                ) return "";
+
+                scheduledFeature = "discovery";
+                IS.ARCHIVIST.scheduledFeature =
+                    "discovery";
+            }
+        }
+
+        if (
+            scheduledFeature === "discovery"
+            && (
             !Array.isArray(config.archiveScope)
             || config.archiveScope.length === 0
+            )
         ) {
             return "";
         }
 
         IS.ARCHIVIST.pending = {
             hash,
-            turn: history.length,
-            mode: scheduledFeature === "maintenance"
-                ? "tracked"
-                : "discovery",
+            turn: archivistActionCount(),
+            mode: scheduledFeature,
             target: target
                 ? {
                     title: target.title,
-                    worldType: cleanArchivistWorldType(
-                        readArchivistMetadata(
-                            target.card ?? {}
-                        ).worldType
-                        ?? ""
-                    )
+                    worldType: target.worldType,
+                    recentMentions: target.recent,
+                    totalMentions: target.total
                 }
                 : null
         };
 
-        IS.ARCHIVIST.lastScanTurn = history.length;
+        IS.ARCHIVIST.lastScanTurn =
+            archivistActionCount();
         countArchivistResult("scans");
 
         return target
-            ? buildTrackedArchivistTask(
-                config,
+            ? buildArchivistMaintenanceTask(
                 target
             )
-            : buildArchivistMemoryTask(
+            : buildArchivistDiscoveryTask(
                 config
             );
     };
@@ -1395,7 +1724,7 @@ ${lines.join("\n")}
             ).worldType
             || ""
         );
-        const mode = latest.mode === "tracked"
+        const mode = latest.mode === "maintenance"
             ? "Maintenance"
             : latest.mode === "discovery"
             ? "Discovery"
@@ -1415,14 +1744,13 @@ ${lines.join("\n")}
                 ? latest.turn
                 : "(unknown)"
             }`,
-            `Tracked target: ${latest.target || "(none)"}`,
+            `Maintenance target: ${latest.target || "(none)"}`,
             `Matched: ${formatArchivistDiagnosticFlag(latest.matched)}`,
             `Valid: ${formatArchivistDiagnosticFlag(latest.valid)}`,
             `Operation: ${latest.kind || "(unknown)"}`,
             `World type: ${worldType || "(none)"}`,
             `Subject: ${latest.title || "(none)"}`,
-            `Key: ${latest.key || "(none)"}`,
-            `Value: ${latest.value || "(none)"}`,
+            `Content: ${latest.content || "(none)"}`,
             `Result: ${latest.result || "(unknown)"}`,
             `Raw operation: ${latest.raw || "(none)"}`
         ];
@@ -1462,7 +1790,7 @@ ${lines.join("\n")}
                         ? failure.turn
                         : "(unknown)"
                     } | ${
-                        failure.mode === "tracked"
+                        failure.mode === "maintenance"
                         ? "Maintenance"
                         : failure.mode === "discovery"
                         ? "Discovery"
@@ -1489,17 +1817,21 @@ ${lines.join("\n")}
             ).length !== 0
         ));
 
-        const memoryCount = ownedCards.reduce(
-            (total, card) => (
-                total
-                + Object.keys(
-                    parseArchivistMemories(
-                        card.entry ?? ""
-                    )
-                ).length
-            ),
-            0
-        );
+        const mentionSummary = ownedCards
+            .map(card => {
+                const mentions =
+                    getArchivistMentionMetrics(
+                        card,
+                        config
+                    );
+                return `${cleanArchivistTitle(
+                    card.title ?? ""
+                )}: ${mentions.recent} recent, ${
+                    mentions.total
+                } total`;
+            })
+            .filter(item => !item.startsWith(":"))
+            .join(", ");
 
         const latest = IS.ARCHIVIST.operation;
 
@@ -1509,8 +1841,9 @@ ${lines.join("\n")}
                 `Maintenance enabled: ${config.archiveMaintenance}`,
                 `Debug mode: ${config.archiveDebug}`,
                 `Discovery strictness: ${config.archiveDiscoveryStrictness}`,
-                `Reject placeholder keys: ${config.archiveRejectPlaceholderKeys}`,
-                `Automatically track discovered cards: ${config.archiveAutoTrackDiscovered}`,
+                `Maintenance recent threshold: ${config.archiveMaintenanceRecentThreshold}`,
+                `Maintenance recent window: ${config.archiveMaintenanceRecentWindow} outputs`,
+                `Maintenance total threshold: ${config.archiveMaintenanceTotalThreshold}`,
                 `Scheduled feature: ${IS.ARCHIVIST.scheduledFeature || "(none)"}`,
                 `Rotation step: ${
                     Number.isInteger(IS.ARCHIVIST.rotation)
@@ -1518,12 +1851,8 @@ ${lines.join("\n")}
                     : 0
                 }`,
                 `Discovery scope: ${config.archiveScope.join(", ") || "(none)"}`,
-                `Tracked entities: ${
-                    config.archiveTracked.join(", ")
-                    || "(none)"
-                }`,
                 `Owned cards: ${ownedCards.length}`,
-                `Stored memories: ${memoryCount}`,
+                `Maintenance mentions: ${mentionSummary || "(none)"}`,
                 `Scans: ${IS.ARCHIVIST.stats.scans}`,
                 `None: ${IS.ARCHIVIST.stats.none}`,
                 `Created: ${IS.ARCHIVIST.stats.created}`,
@@ -1566,7 +1895,7 @@ ${lines.join("\n")}
     const ARCHIVIST_DEBUG_KEY = "@ARCHIVIST_DEBUG";
     const ARCHIVIST_DEBUG_TITLE = "DEBUG";
     const ARCHIVIST_DEBUG_DESCRIPTION =
-        "> One raw Archivist Discovery operation per line.";
+        "> One raw Archivist operation per line.";
     const ARCHIVIST_CONTEXT_DUMP_KEY =
         "@ARCHIVIST_CONTEXT_DUMP";
     const ARCHIVIST_CONTEXT_DUMP_TITLE =
@@ -1672,14 +2001,12 @@ ${lines.join("\n")}
         return true;
     };
 
-    const appendArchivistDiscoveryDebugOperation = (
+    const appendArchivistDebugOperation = (
         operation = {},
-        pending = {},
         config = {}
     ) => {
         if (
             !config.archiveDebug
-            || pending.mode !== "discovery"
             || !operation.matched
         ) {
             return false;
@@ -1737,19 +2064,39 @@ ${lines.join("\n")}
                 archiveMaintenance: Boolean(
                     S.IS_ARCHIVIST_MAINTENANCE_ENABLED_BY_DEFAULT
                 ),
+                archiveMaintenanceRecentThreshold:
+                    Math.max(
+                        1,
+                        Math.floor(
+                            Number(
+                                S.ARCHIVIST_MAINTENANCE_RECENT_THRESHOLD
+                            ) || 2
+                        )
+                    ),
+                archiveMaintenanceRecentWindow:
+                    Math.max(
+                        1,
+                        Math.floor(
+                            Number(
+                                S.ARCHIVIST_MAINTENANCE_RECENT_WINDOW
+                            ) || 5
+                        )
+                    ),
+                archiveMaintenanceTotalThreshold:
+                    Math.max(
+                        1,
+                        Math.floor(
+                            Number(
+                                S.ARCHIVIST_MAINTENANCE_TOTAL_THRESHOLD
+                            ) || 4
+                        )
+                    ),
                 archiveDebug: Boolean(
                     S.IS_ARCHIVIST_DEBUG_MODE_ENABLED_BY_DEFAULT
                 ),
-                archiveRejectPlaceholderKeys: Boolean(
-                    S.IS_ARCHIVIST_PLACEHOLDER_KEY_REJECTION_ENABLED_BY_DEFAULT
-                ),
-                archiveAutoTrackDiscovered: Boolean(
-                    S.IS_ARCHIVIST_AUTO_TRACK_DISCOVERED_ENABLED_BY_DEFAULT
-                ),
                 archiveScope: cleanArchivistList(
                     S.ARCHIVIST_DISCOVERY_SCOPE
-                ),
-                archiveTracked: []
+                )
             };
 
             const simplify = (
@@ -1791,6 +2138,20 @@ ${lines.join("\n")}
                 }
 
                 return fallbackValue;
+            };
+
+            const parsePositiveInteger = (
+                value,
+                fallbackValue = 1
+            ) => {
+                const parsed = Number.parseInt(
+                    String(value),
+                    10
+                );
+                return Number.isInteger(parsed)
+                    && 0 < parsed
+                    ? parsed
+                    : fallbackValue;
             };
 
             let card = null;
@@ -1836,32 +2197,26 @@ ${lines.join("\n")}
                     ARCHIVIST_CONFIG_KEY,
                     [
                         "> Archivist Discovery creates valuable new Archive cards.",
-                        "> Archivist Maintenance updates player-selected tracked Archive cards.",
-                        "> Debug mode logs raw parenthesized Discovery operations to the DEBUG card instead of the story output.",
+                        "> Archivist Maintenance reviews frequently mentioned Archive cards and rewrites their complete contents when facts changed.",
+                        "> Debug mode logs raw parenthesized Archivist operations to the DEBUG card instead of the story output.",
                         "> Discovery strictness currently supports Medium.",
                         "> Set Discovery scope to any subject type you want to discover, e.g. Species, Religion, Nation, Character, Magic System.",
                         `> Enable Discovery: ${fallback.archiveDiscovery}`,
                         `> Enable Maintenance: ${fallback.archiveMaintenance}`,
+                        `> Maintenance recent threshold: ${fallback.archiveMaintenanceRecentThreshold}`,
+                        `> Maintenance recent window: ${fallback.archiveMaintenanceRecentWindow}`,
+                        `> Maintenance total threshold: ${fallback.archiveMaintenanceTotalThreshold}`,
                         `> Debug mode: ${fallback.archiveDebug}`,
                         `> Discovery strictness: ${fallback.archiveDiscoveryStrictness}`,
-                        `> Reject placeholder keys: ${fallback.archiveRejectPlaceholderKeys}`,
-                        `> Automatically track discovered cards: ${fallback.archiveAutoTrackDiscovered}`,
                         `> Discovery scope: ${fallback.archiveScope.join(", ")}`
                     ].join("\n"),
                     "class",
                     "Configure \nArchivist",
-                    [
-                        "> Write exact world subject names to maintain on separate lines below.",
-                        "",
-                        ""
-                    ].join("\n"),
+                    "> Maintenance counts mentions only in newly generated AI story outputs.",
                     { returnCard: true }
                 );
 
                 if (!card) {
-                    archivistRejectPlaceholderKeys =
-                        fallback.archiveRejectPlaceholderKeys;
-
                     return {
                         card: null,
                         ...fallback
@@ -1903,6 +2258,24 @@ ${lines.join("\n")}
                     fallback.archiveMaintenance
                 );
 
+            const archiveMaintenanceRecentThreshold =
+                parsePositiveInteger(
+                    extract.maintenancerecentthreshold,
+                    fallback.archiveMaintenanceRecentThreshold
+                );
+
+            const archiveMaintenanceRecentWindow =
+                parsePositiveInteger(
+                    extract.maintenancerecentwindow,
+                    fallback.archiveMaintenanceRecentWindow
+                );
+
+            const archiveMaintenanceTotalThreshold =
+                parsePositiveInteger(
+                    extract.maintenancetotalthreshold,
+                    fallback.archiveMaintenanceTotalThreshold
+                );
+
             const archiveDebug =
                 parseBoolean(
                     extract.debugmode,
@@ -1915,42 +2288,11 @@ ${lines.join("\n")}
                     ?? fallback.archiveDiscoveryStrictness
                 );
 
-            const archiveRejectPlaceholderKeys =
-                parseBoolean(
-                    extract.rejectplaceholderkeys,
-                    fallback.archiveRejectPlaceholderKeys
-                );
-
-            const archiveAutoTrackDiscovered =
-                parseBoolean(
-                    extract.automaticallytrackdiscoveredcards,
-                    fallback.archiveAutoTrackDiscovered
-                );
-
             const archiveScope =
                 cleanArchivistList(
                     extract.discoveryscope
                     ?? fallback.archiveScope
                 );
-
-            const trackedSource = (
-                typeof card.description === "string"
-                ? card.description
-                : ""
-            )
-                .split("\n")
-                .filter(line => (
-                    !line.trim().startsWith(">")
-                ))
-                .join("\n");
-
-            const archiveTracked =
-                cleanArchivistList(
-                    trackedSource
-                );
-
-            archivistRejectPlaceholderKeys =
-                archiveRejectPlaceholderKeys;
 
             if (archiveDebug) {
                 ensureArchivistDebugCard();
@@ -1962,36 +2304,33 @@ ${lines.join("\n")}
             card.keys = ARCHIVIST_CONFIG_KEY;
             card.entry = [
                 "> Archivist Discovery creates valuable new Archive cards.",
-                "> Archivist Maintenance updates player-selected tracked Archive cards.",
-                "> Debug mode logs raw parenthesized Discovery operations to the DEBUG card instead of the story output.",
+                "> Archivist Maintenance reviews frequently mentioned Archive cards and rewrites their complete contents when facts changed.",
+                "> Debug mode logs raw parenthesized Archivist operations to the DEBUG card instead of the story output.",
                 "> Discovery strictness currently supports Medium.",
                 "> Set Discovery scope to any subject type you want to discover, e.g. Species, Religion, Nation, Character, Magic System.",
                 `> Enable Discovery: ${archiveDiscovery}`,
                 `> Enable Maintenance: ${archiveMaintenance}`,
+                `> Maintenance recent threshold: ${archiveMaintenanceRecentThreshold}`,
+                `> Maintenance recent window: ${archiveMaintenanceRecentWindow}`,
+                `> Maintenance total threshold: ${archiveMaintenanceTotalThreshold}`,
                 `> Debug mode: ${archiveDebug}`,
                 `> Discovery strictness: ${archiveDiscoveryStrictness}`,
-                `> Reject placeholder keys: ${archiveRejectPlaceholderKeys}`,
-                `> Automatically track discovered cards: ${archiveAutoTrackDiscovered}`,
                 `> Discovery scope: ${archiveScope.join(", ")}`
             ].join("\n");
 
-            card.description = [
-                "> Write exact world subject names to maintain on separate lines below.",
-                "",
-                ...archiveTracked,
-                ""
-            ].join("\n");
+            card.description =
+                "> Maintenance counts mentions only in newly generated AI story outputs.";
 
             return {
                 card,
                 archiveDiscovery,
                 archiveMaintenance,
+                archiveMaintenanceRecentThreshold,
+                archiveMaintenanceRecentWindow,
+                archiveMaintenanceTotalThreshold,
                 archiveDebug,
                 archiveDiscoveryStrictness,
-                archiveRejectPlaceholderKeys,
-                archiveAutoTrackDiscovered,
-                archiveScope,
-                archiveTracked
+                archiveScope
             };
         }
     }
@@ -2016,13 +2355,13 @@ ${lines.join("\n")}
      * @property {boolean} pin - Is the config card pinned near the top of the list?
      * @property {boolean} auto - Is Auto-Cards enabled?
      * @property {boolean} archiveDiscovery - Is Archivist Discovery enabled?
-     * @property {boolean} archiveMaintenance - Is tracked Archive maintenance enabled?
-     * @property {boolean} archiveDebug - Are raw Discovery operations logged to the DEBUG card?
+     * @property {boolean} archiveMaintenance - Is frequency-based Archive maintenance enabled?
+     * @property {number} archiveMaintenanceRecentThreshold - Mentioning AI outputs inside the recent window required for a review
+     * @property {number} archiveMaintenanceRecentWindow - Number of generated AI outputs in the recent window
+     * @property {number} archiveMaintenanceTotalThreshold - Mentions since the last review required regardless of recency
+     * @property {boolean} archiveDebug - Are raw Archivist operations logged to the DEBUG card?
      * @property {"Medium"} archiveDiscoveryStrictness - Supported Discovery strictness
-     * @property {boolean} archiveRejectPlaceholderKeys - Are literal prompt-placeholder keys rejected?
-     * @property {boolean} archiveAutoTrackDiscovered - Are newly discovered Archive card names automatically added to the tracked list?
      * @property {string[]} archiveScope - Exhaustive subject types allowed for Discovery
-     * @property {string[]} archiveTracked - Player-selected Archive subject names
      * @property {string[]} agents - All agent names, ordered from highest to lowest trigger priority
      */
     /**
@@ -2759,17 +3098,17 @@ ${lines.join("\n")}
             unzero();
 
             const archiveTask =
-                requestArchivistMemoryTask(
+                requestArchivistTask(
                     config,
                     scheduledFeature
                 );
 
             if (archiveTask !== "") {
-                text = `${text.trim()}
-
-${archiveTask}
-
-`;
+                text = appendArchivistTaskWithinLimit(
+                    text,
+                    archiveTask,
+                    info.maxChars
+                );
             }
 
             writeRequestedArchivistContextDump(
@@ -3776,10 +4115,38 @@ Follow the format **perfectly**.
     // Process model output and implement brain operations
     /** @type {config} */
     const config = Config.get();
+    const archivistOutputObservation =
+        prepareArchivistOutputObservation();
+    const archivistMentionEligibleIds =
+        new Set(
+            storyCards
+                .map(card => (
+                    readArchivistMetadata(
+                        card
+                    ).id
+                    ?? ""
+                ))
+                .filter(Boolean)
+        );
+    let archivistOutputMentionsRecorded =
+        false;
+    const recordCurrentArchivistOutput = (
+        storyOutput = text
+    ) => {
+        if (archivistOutputMentionsRecorded) {
+            return;
+        }
+        archivistOutputMentionsRecorded = true;
+        recordArchivistOutputMentions(
+            storyOutput,
+            archivistOutputObservation,
+            archivistMentionEligibleIds
+        );
+    };
     // ==================== ARCHIVIST OUTPUT INTEGRATION ====================
-    // Automatic gameplay uses compact Inner Self-style world memories.
-    let archivistMemoryOperation = IS.ARCHIVIST.pending
-        ? parseArchivistMemoryOperation(
+    // Automatic gameplay uses compact Archive creation and rewrite operations.
+    let archivistOperation = IS.ARCHIVIST.pending
+        ? parseArchivistOperation(
             text,
             IS.ARCHIVIST.pending.mode
         )
@@ -3791,26 +4158,38 @@ Follow the format **perfectly**.
         };
 
     if (IS.ARCHIVIST.pending) {
-        archivistMemoryOperation =
+        archivistOperation =
             validateArchivistRoute(
-                archivistMemoryOperation,
+                archivistOperation,
                 IS.ARCHIVIST.pending,
                 config
             );
 
-        archivistMemoryOperation = {
-            ...archivistMemoryOperation,
+        archivistOperation = {
+            ...archivistOperation,
             worldType:
                 resolveArchivistOperationWorldType(
-                    archivistMemoryOperation,
+                    archivistOperation,
                     IS.ARCHIVIST.pending
                 )
         };
+
+        if (
+            IS.ARCHIVIST.pending.mode
+                === "discovery"
+            && archivistOperation.title
+        ) {
+            archivistMentionEligibleIds.delete(
+                archivistId(
+                    archivistOperation.title
+                )
+            );
+        }
     }
 
-    if (archivistMemoryOperation.matched) {
+    if (archivistOperation.matched) {
         text =
-            archivistMemoryOperation.rest
+            archivistOperation.rest
             || " ";
     }
 
@@ -3829,16 +4208,16 @@ Follow the format **perfectly**.
             IS.ARCHIVIST.hash = pending.hash;
 
             const result =
-                applyArchivistMemoryOperation(
-                    archivistMemoryOperation,
+                applyArchivistOperation(
+                    archivistOperation,
                     config,
-                    history.length,
-                    pending
+                    archivistActionCount(),
+                    pending,
+                    archivistOutputObservation.sequence
                 );
 
-            appendArchivistDiscoveryDebugOperation(
-                archivistMemoryOperation,
-                pending,
+            appendArchivistDebugOperation(
+                archivistOperation,
                 config
             );
 
@@ -3853,30 +4232,27 @@ Follow the format **perfectly**.
                     ?? "",
                 matched:
                     Boolean(
-                        archivistMemoryOperation.matched
+                        archivistOperation.matched
                     ),
                 valid:
                     Boolean(
-                        archivistMemoryOperation.valid
+                        archivistOperation.valid
                     ),
                 kind:
-                    archivistMemoryOperation.kind
+                    archivistOperation.kind
                     ?? "missing",
                 worldType:
-                    archivistMemoryOperation.worldType
+                    archivistOperation.worldType
                     ?? "",
                 title:
-                    archivistMemoryOperation.title
+                    archivistOperation.title
                     ?? "",
-                key:
-                    archivistMemoryOperation.key
-                    ?? "",
-                value:
-                    archivistMemoryOperation.value
+                content:
+                    archivistOperation.content
                     ?? "",
                 raw:
                     cleanArchivistValue(
-                        archivistMemoryOperation.raw
+                        archivistOperation.raw
                         ?? "",
                         2000
                     ),
@@ -3884,7 +4260,7 @@ Follow the format **perfectly**.
                     result?.reason
                     ?? "unknown",
                 turn:
-                    history.length
+                    archivistActionCount()
             };
 
             IS.ARCHIVIST.operation =
@@ -3897,7 +4273,7 @@ Follow the format **perfectly**.
             }
 
             IS.ARCHIVIST.lastTurn =
-                history.length;
+                archivistActionCount();
         }
 
         IS.ARCHIVIST.pending = null;
@@ -4046,6 +4422,7 @@ I hope you will have lots of fun!
     } else if (!config.allow) {
         // Early exit if Inner Self is disabled
         text ||= "\u200B";
+        recordCurrentArchivistOutput();
         appendRequestedArchivistStatus();
         IS.agent = "";
         return;
@@ -4171,6 +4548,7 @@ I hope you will have lots of fun!
         if (text === "") {
             // Guard against empty string outputs to avoid a known AID bug
             text = "\u200B";
+            recordCurrentArchivistOutput();
             appendRequestedArchivistStatus();
             return;
         }
@@ -4183,6 +4561,7 @@ I hope you will have lots of fun!
             // Ensure taskless outputs still have a space of separation from the previous action
             text = ` ${text}`;
         }
+        recordCurrentArchivistOutput();
         appendRequestedArchivistStatus();
         return;
     }
@@ -4497,6 +4876,7 @@ I hope you will have lots of fun!
     );
     // ==================== OUTPUT FINALIZATION ====================
     // Handle empty outputs and ensure proper spacing between actions
+    const archivistStoryOutput = text;
     if (text === "") {
         // AID does not tolerate empty string outputs and "please select continue" messages are cringe
         // Return encoding if available, otherwise a zero-width space placeholder
@@ -4507,12 +4887,15 @@ I hope you will have lots of fun!
         // Ensure all between-action linebreaks are equally spaced
         prespace();
     }
+    recordCurrentArchivistOutput(
+        archivistStoryOutput
+    );
     appendRequestedArchivistStatus();
     // ==================== OPERATION EXECUTOR ====================
     // Execute queued Archivist and brain operations independently.
     const hash = historyHash();
 
-    // Archivist memory execution already occurred above.
+    // Archivist operation execution already occurred above.
 
     // Inner Self brain execution retains its original independent behavior.
     if ((operations.length === 0) || (agent === null)) {
@@ -9890,7 +10273,7 @@ function AutoCards(inHook, inText, inStop) {
     function postMessages() {
         const preMessage = getStateMessage();
         if ((preMessage === AC.message.previous) && (AC.message.pending.length !== 0)) {
-            // No other scripts are attempting to update state.message during this turn
+            // No other scripts are attempting to TOtate.message during this turn
             // One or more pending Auto-Cards messages exist
             if (!AC.message.suppress) {
                 // Message suppression is off
