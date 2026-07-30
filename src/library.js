@@ -1358,7 +1358,7 @@ function InnerSelf(hook) {
             : "";
         return `
 <SYSTEM>
-# UPDATE STORY CARD (REQUIRED)
+# STORY CARD REVIEW (REQUIRED)
 Determine whether the current Story Card for "${target.title}" needs an update.
 
 Current Story Card:
@@ -1463,39 +1463,32 @@ NEW_ENTRY must not be copied literally.
 
         return `
 <SYSTEM>
-# CANDIDATE SELECTION (REQUIRED)
-Only a subject that satisfies every rule below is a CANDIDATE. Do not first collect a broader list of names or subjects.
-
-For CANDIDATE selection, only the story text under the "Recent Story:" heading is permitted evidence. Plot components, Author's note, Story Cards, memories, other context sections, and these task instructions may be used for continuing the story, but must not provide a CANDIDATE name or FACT.
-
-A CANDIDATE:
+# SUBJECT FILTERING (REQUIRED)
+Filter the subjects explicitly named in Recent Story through all of the following filters. A subject survives only if it satisfies every filter:
 ${existingRule}
 - has one exact, continuous name or title explicitly present in Recent Story. Never invent, combine, complete, expand, embellish, reinterpret, or replace it.
-- is itself directly and naturally one of the following types: ${archiveTypes}. If none of these types directly states what the subject itself is, it is not a CANDIDATE. Never use the closest type or qualify a subject through association, role, membership, leadership, ownership, location, use, or a logical chain.
+- is itself directly and naturally one of the following types: ${archiveTypes}. If none of these types directly states what the subject itself is, it does not survive. Never use the closest type or qualify a subject through association, role, membership, leadership, ownership, location, use, or a logical chain.
 - is a distinct and persistent subject that remains identifiable beyond the current scene, not generic scenery, an ordinary object, a temporary event, a temporary condition, or a flavor-only detail.
 - has at least one FACT established by Recent Story. Never invent, expand, enrich, rationalize, or speculate beyond what Recent Story establishes.
 - has a FACT that is both persistently important for understanding the subject or world and already important for understanding the ongoing plot, goals, decisions, stakes, conflict, an important relationship, a world rule, or an established future interaction. Mere existence, naming, generic description, incidental location, temporary state, flavor, or possible future relevance is insufficient.
 - is worth remembering for lasting continuity. Lack of recurrence alone does not disqualify one sufficiently significant introduction.
 
-Within Recent Story, of all subjects satisfying every rule, only the one with the greatest lasting continuity value is the CANDIDATE.
-
 # STRICT OUTPUT FORMAT (REQUIRED)
 You must output exactly one parenthetical task followed by the story continuation.
 
-## NO CANDIDATE (OPTION A)
-If you have no CANDIDATE, simply output (none) followed by the STORY CONTINUATION.
+## NO SURVIVOR (OPTION A)
+If no subject survives every filter, output (none) followed by the STORY CONTINUATION.
 
-## ONE CANDIDATE (OPTION B)
+## AT LEAST ONE SURVIVOR (OPTION B)
 Use the following format:
 (NAME|TYPE|FACT)
 
 Inside the parentheses:
-
-- Replace NAME with the CANDIDATE's readable story name using normal spaces, never snake_case or underscores.
+- Replace NAME with the readable story name of the surviving subject.
 - Then write "|".
-- Replace TYPE with the exact type by which the CANDIDATE qualified.
+- Replace TYPE with the exact type from the exhaustive list that the surviving subject directly is.
 - Then write "|".
-- Replace FACT with the significant FACT of the CANDIDATE. FACT must be one concise, objective, self-contained third-person sentence that explicitly names NAME.
+- Replace FACT with the significant FACT of the surviving subject. FACT must be one concise, objective, self-contained third-person sentence that explicitly names NAME.
 - End FACT with a period, then immediately close the parenthesis.
 
 NAME, TYPE and FACT must not be copied literally.
