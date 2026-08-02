@@ -1456,39 +1456,36 @@ NEW_ENTRY must not be copied literally.
         const existingTitles =
             buildArchivistTitleIndex(", ");
         const existingRule = existingTitles === "(none)"
-            ? "- is a new subject. No subjects are already represented."
-            : `- is a new subject that is not any of these already represented subjects: ${existingTitles}. A leading article, shortened or expanded name, title, alias, or clearly equivalent wording does not make an already represented subject new.`;
+            ? ""
+            : `Then you must discard: ${existingTitles}`;
         const archiveTypes =
             config.archiveScope.join(", ") || "(none)";
 
         return `
 <SYSTEM>
-# SUBJECT FILTERING (REQUIRED)
-Filter the subjects explicitly named in Recent Story through all of the following filters. A subject survives only if it satisfies every filter:
+# WORLD FILTERING (REQUIRED)
+First you must filter out of Recent Story any entity, subject or object that isn't: ${archiveTypes}
 ${existingRule}
-- has one exact, continuous name or title explicitly present in Recent Story. Never invent, combine, complete, expand, embellish, reinterpret, or replace it.
-- is itself directly and naturally one of the following types: ${archiveTypes}. If none of these types directly states what the subject itself is, it does not survive. Never use the closest type or qualify a subject through association, role, membership, leadership, ownership, location, use, or a logical chain.
-- is a distinct and persistent subject that remains identifiable beyond the current scene, not generic scenery, an ordinary object, a temporary event, a temporary condition, or a flavor-only detail.
-- has at least one FACT established by Recent Story. Never invent, expand, enrich, rationalize, or speculate beyond what Recent Story establishes.
-- has a FACT that is both persistently important for understanding the subject or world and already important for understanding the ongoing plot, goals, decisions, stakes, conflict, an important relationship, a world rule, or an established future interaction. Mere existence, naming, generic description, incidental location, temporary state, flavor, or possible future relevance is insufficient.
-- is worth remembering for lasting continuity. Lack of recurrence alone does not disqualify one sufficiently significant introduction.
+Then you must discard anything that isn't literally named in the filtered context.
+Then you choose one entity, subject or object out of this filtered context.
+You may end up with no entity, no subject or no object.
 
 # STRICT OUTPUT FORMAT (REQUIRED)
-You must output exactly one parenthetical task followed by the story continuation.
+You must output exactly one parenthetical task followed by the STORY CONTINUATION.
 
-## NO SURVIVOR (OPTION A)
-If no subject survives every filter, output (none) followed by the STORY CONTINUATION.
+## NO ENTITY, NO SUBJECT AND NO OBJECT (OPTION A)
+If nothing is left, output (none) followed by the STORY CONTINUATION.
 
-## AT LEAST ONE SURVIVOR (OPTION B)
+## ENTITY, SUBJECT OR OBJECT (OPTION B)
 Use the following format:
 (NAME|TYPE|FACT)
 
 Inside the parentheses:
-- Replace NAME with the readable story name of the surviving subject.
+- Replace NAME with the readable story name of what you have chosen.
 - Then write "|".
-- Replace TYPE with the exact type from the exhaustive list that the surviving subject directly is.
+- Replace TYPE with what kind of entity NAME is.
 - Then write "|".
-- Replace FACT with the significant FACT of the surviving subject. FACT must be one concise, objective, self-contained third-person sentence that explicitly names NAME.
+- Replace FACT with one concise fact about NAME.
 - End FACT with a period, then immediately close the parenthesis.
 
 NAME, TYPE and FACT must not be copied literally.
