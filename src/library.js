@@ -419,6 +419,7 @@ function InnerSelf(hook) {
         ARCHIVIST: {
             hash: "",
             pending: null,
+            retryTransaction: null,
             operation: null,
             failures: [],
             statusRequested: false,
@@ -473,6 +474,11 @@ function InnerSelf(hook) {
         }
         return n.toString(16);
     };
+    const cloneArchivistState = (value) => (
+        value === undefined
+        ? undefined
+        : JSON.parse(JSON.stringify(value))
+    );
     /**
      * Safely parses a JSON string into an object
      * Optionally attempts to repair malformed JSON by extracting quoted content
@@ -613,6 +619,47 @@ function InnerSelf(hook) {
         const id = archivistId(titleOrId);
         if (id === "") return null;
         return storyCards.find(card => readArchivistMetadata(card).id === id) ?? null;
+    };
+
+    const snapshotArchivistCard = (card = null) => (
+        card
+        ? {
+            keys: card.keys ?? "",
+            entry: card.entry ?? "",
+            type: card.type ?? "",
+            title: card.title ?? "",
+            description: card.description ?? ""
+        }
+        : null
+    );
+
+    const archivistCardFingerprint = (card = null) => JSON.stringify(
+        snapshotArchivistCard(card)
+    );
+
+    const restoreArchivistCard = (card = null, snapshot = null) => {
+        if (!card || !snapshot) return false;
+        for (const key of [
+            "keys",
+            "entry",
+            "type",
+            "title",
+            "description"
+        ]) {
+            card[key] = snapshot[key];
+        }
+        return true;
+    };
+
+    const removeArchivistStoryCard = (card = null) => {
+        const index = storyCards.indexOf(card);
+        if (index === -1) return false;
+        if (typeof removeStoryCard === "function") {
+            removeStoryCard(index);
+        } else {
+            storyCards.splice(index, 1);
+        }
+        return true;
     };
 
     const findArchivistTitleCollision = (title = "") => {
@@ -815,7 +862,7 @@ function InnerSelf(hook) {
                     inner
                 );
                 const placeholderContent =
-                    /^(?:new[\s_-]*entry|full[\s_-]*content|content)$/i.test(
+                    /^(?:new[\s_-]*entry|full[\s_-]*content|content|description)$/i.test(
                         content
                     );
                 const oldRewriteFormat =
@@ -1096,6 +1143,14 @@ function InnerSelf(hook) {
             }
             return { ok: true, reason: "none" };
         }
+        const rewriteCard = operation.kind === "rewrite_archive"
+            ? findArchivistCard(
+                pending.target?.title ?? ""
+            )
+            : null;
+        const rewriteBefore = snapshotArchivistCard(
+            rewriteCard
+        );
         const result = operation.kind === "create_archive"
             ? createArchivistCard({
                 title: operation.title,
@@ -1111,6 +1166,32 @@ function InnerSelf(hook) {
                 turn
             })
             : { ok: false, reason: "unknown_operation" };
+        if (result.ok && result.reason === "created") {
+            result.retryUndo = {
+                kind: "remove_created",
+                id: readArchivistMetadata(
+                    result.card
+                ).id ?? "",
+                after: archivistCardFingerprint(
+                    result.card
+                )
+            };
+        } else if (
+            result.ok
+            && result.reason === "rewritten"
+            && rewriteBefore
+        ) {
+            result.retryUndo = {
+                kind: "restore_rewritten",
+                id: readArchivistMetadata(
+                    result.card
+                ).id ?? "",
+                before: rewriteBefore,
+                after: archivistCardFingerprint(
+                    result.card
+                )
+            };
+        }
         if (result.ok) {
             if (result.reason === "created") countArchivistResult("created");
             else if (result.reason === "rewritten") countArchivistResult("updated");
@@ -1358,32 +1439,27 @@ function InnerSelf(hook) {
             : "";
         return `
 <SYSTEM>
-# STORY CARD REVIEW (REQUIRED)
-Determine whether the current Story Card for "${target.title}" needs an update.
+# ENTRY REVIEW (REQUIRED)
+Using only Recent Story as evidence, you must determine whether the current ENTRY for "${target.title}" needs an update or not.
 
-Current Story Card:
-<ARCHIVE_ENTRY>${content}</ARCHIVE_ENTRY>
-
-Use only Recent Story as evidence.
+current ENTRY for ${target.title}:
+<ENTRY>${content}</ENTRY>
 
 # STRICT OUTPUT FORMAT (REQUIRED)
-You must output exactly one parenthetical task followed by the STORY CONTINUATION.
+You must output exactly one parenthetical block followed by the STORY CONTINUATION.
 
-## NO UPDATE NECESSARY (OPTION A)
-If Recent Story establishes no new persistent significant fact directly about ${target.title} and neither changes, contradicts, nor disproves a stored fact, output (none) followed by the STORY CONTINUATION.
-
-## UPDATE STORY CARD (OPTION B)
-Otherwise use the following format:
-(NEW_ENTRY)
+## UPDATE ENTRY (OPTION A)
+Use the format:
+(DESCRIPTION)
 
 Inside the parentheses:
-- Replace NEW_ENTRY with the complete replacement entry about ${target.title}, not a patch.
-- Preserve every stored fact unless Recent Story explicitly changes, contradicts, or disproves it.
-- Add only newly established persistent significant facts. Replace outdated facts and remove disproven facts.
-- NEW_ENTRY must be concise, objective, self-contained third-person prose that explicitly names ${target.title}. Never invent, infer, enrich, or speculate.
-- Do not include a title header, braces, labels, line breaks, or parentheses in NEW_ENTRY.
+- Replace DESCRIPTION with a condensed description of the most important facts about ${target.title} from Recent Story.
+- End the final sentence with a period, then immediately close the parenthesis.
 
-NEW_ENTRY must not be copied literally.
+DESCRIPTION must not be copied literally
+
+## DON'T UPDATE ENTRY (OPTION B)
+Output (none) followed by the STORY CONTINUATION.
 
 ## STORY CONTINUATION (REQUIRED)
 - After the closing parenthesis, add a space.
@@ -1603,9 +1679,124 @@ ${base.slice(cut, storyEnd).trimStart()}${base.slice(storyEnd)}`;
         return feature;
     };
 
+    const snapshotArchivistRetryState = () => {
+        return {
+            hash: IS.ARCHIVIST.hash,
+            operation: cloneArchivistState(
+                IS.ARCHIVIST.operation
+            ),
+            failures: cloneArchivistState(
+                IS.ARCHIVIST.failures
+            ),
+            lastTurn: IS.ARCHIVIST.lastTurn,
+            lastScanTurn:
+                IS.ARCHIVIST.lastScanTurn,
+            maintenance: cloneArchivistState(
+                IS.ARCHIVIST.maintenance
+            ),
+            stats: cloneArchivistState(
+                IS.ARCHIVIST.stats
+            )
+        };
+    };
+
+    const undoArchivistCardMutation = (undo = null) => {
+        if (!undo?.id) return true;
+        const card = findArchivistCard(undo.id);
+        if (!card) {
+            return undo.kind === "remove_created";
+        }
+        if (
+            archivistCardFingerprint(card)
+            !== undo.after
+        ) {
+            return false;
+        }
+        if (undo.kind === "remove_created") {
+            return removeArchivistStoryCard(card);
+        }
+        if (undo.kind === "restore_rewritten") {
+            return restoreArchivistCard(
+                card,
+                undo.before
+            );
+        }
+        return false;
+    };
+
+    const prepareArchivistRetry = () => {
+        const transaction =
+            IS.ARCHIVIST.retryTransaction;
+        if (!transaction) return 0;
+        const hash = historyHash();
+        if (transaction.hash !== hash) {
+            IS.ARCHIVIST.retryTransaction = null;
+            return 0;
+        }
+
+        const retryCount = (
+            Number.isInteger(transaction.retryCount)
+            ? transaction.retryCount
+            : 0
+        ) + 1;
+
+        const cardRestored =
+            undoArchivistCardMutation(
+                transaction.cardUndo
+            );
+        const before = transaction.before ?? {};
+        IS.ARCHIVIST.hash = before.hash ?? "";
+        IS.ARCHIVIST.operation =
+            cloneArchivistState(before.operation)
+            ?? null;
+        IS.ARCHIVIST.failures =
+            cloneArchivistState(before.failures)
+            ?? [];
+        IS.ARCHIVIST.lastTurn =
+            Number.isInteger(before.lastTurn)
+            ? before.lastTurn
+            : -1;
+        IS.ARCHIVIST.lastScanTurn =
+            Number.isInteger(before.lastScanTurn)
+            ? before.lastScanTurn
+            : -1;
+        IS.ARCHIVIST.maintenance =
+            cloneArchivistState(before.maintenance)
+            ?? {
+                sequence: 0,
+                observations: [],
+                cards: {}
+            };
+        IS.ARCHIVIST.stats =
+            cloneArchivistState(before.stats)
+            ?? {
+                scans: 0,
+                none: 0,
+                created: 0,
+                updated: 0,
+                rejected: 0,
+                duplicates: 0,
+                errors: 0
+            };
+        IS.ARCHIVIST.pending = null;
+        IS.ARCHIVIST.retryTransaction = null;
+
+        if (!cardRestored) {
+            recordArchivistFailure({
+                mode: transaction.mode ?? "",
+                scanTurn: transaction.turn ?? -1,
+                result: "retry_undo_conflict",
+                turn: archivistActionCount()
+            });
+            countArchivistResult("errors");
+        }
+        return retryCount;
+    };
+
     const requestArchivistTask = (
         config = {},
-        scheduledFeature = ""
+        scheduledFeature = "",
+        retryCount = 0
     ) => {
         if (
             IS.ARCHIVIST.pending
@@ -1656,6 +1847,9 @@ ${base.slice(cut, storyEnd).trimStart()}${base.slice(storyEnd)}`;
             hash,
             turn: archivistActionCount(),
             mode: scheduledFeature,
+            retryCount,
+            retryBefore:
+                snapshotArchivistRetryState(),
             target: target
                 ? {
                     title: target.title,
@@ -1885,7 +2079,7 @@ ${lines.join("\n")}
     const ARCHIVIST_DEBUG_KEY = "@ARCHIVIST_DEBUG";
     const ARCHIVIST_DEBUG_TITLE = "DEBUG";
     const ARCHIVIST_DEBUG_DESCRIPTION =
-        "> One raw Archivist operation per line.";
+        "> Append-only Archivist operation log with mode and retry information.";
     const ARCHIVIST_CONTEXT_DUMP_KEY =
         "@ARCHIVIST_CONTEXT_DUMP";
     const ARCHIVIST_CONTEXT_DUMP_TITLE =
@@ -1993,7 +2187,8 @@ ${lines.join("\n")}
 
     const appendArchivistDebugOperation = (
         operation = {},
-        config = {}
+        config = {},
+        pending = {}
     ) => {
         if (
             !config.archiveDebug
@@ -2011,9 +2206,35 @@ ${lines.join("\n")}
         const card = ensureArchivistDebugCard();
         if (!card) return false;
 
+        const mode = pending.mode === "maintenance"
+            ? "Maintenance"
+            : pending.mode === "discovery"
+            ? "Discovery"
+            : "Unknown";
+        const retryCount = Number.isInteger(
+            pending.retryCount
+        )
+            ? pending.retryCount
+            : 0;
+        const target = mode === "Maintenance"
+            ? cleanArchivistTitle(
+                pending.target?.title ?? ""
+            )
+            : "";
+        const line = [
+            raw,
+            mode,
+            ...(target !== ""
+                ? [target]
+                : []),
+            ...(0 < retryCount
+                ? [`Retry ${retryCount}`]
+                : [])
+        ].join(" - ");
+
         card.entry = [
             card.entry.trimEnd(),
-            raw
+            line
         ].filter(Boolean).join("\n");
 
         return true;
@@ -2995,6 +3216,8 @@ ${lines.join("\n")}
         /** @type {config} */
         const config = Config.get();
         const scheduledFeature = selectInnerSelfFeature(config);
+        const archivistRetryCount =
+            prepareArchivistRetry();
         if (config.pin) {
             // Move config card to top of list if pinning is enabled
             const index = storyCards.indexOf(config.card);
@@ -3090,7 +3313,8 @@ ${lines.join("\n")}
             const archiveTask =
                 requestArchivistTask(
                     config,
-                    scheduledFeature
+                    scheduledFeature,
+                    archivistRetryCount
                 );
 
             if (archiveTask !== "") {
@@ -4208,13 +4432,29 @@ Follow the format **perfectly**.
 
             appendArchivistDebugOperation(
                 archivistOperation,
-                config
+                config,
+                pending
             );
+
+            IS.ARCHIVIST.retryTransaction = {
+                hash: pending.hash,
+                mode: pending.mode,
+                turn: pending.turn,
+                retryCount:
+                    pending.retryCount ?? 0,
+                before: pending.retryBefore
+                    ?? snapshotArchivistRetryState(),
+                cardUndo: result?.retryUndo
+                    ?? null
+            };
 
             const diagnostic = {
                 mode:
                     pending.mode
                     ?? "",
+                retryCount:
+                    pending.retryCount
+                    ?? 0,
                 scanTurn:
                     pending.turn,
                 target:
